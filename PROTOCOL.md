@@ -30,6 +30,12 @@ Kurallar (tartışmaya kapalı):
    anahtarla başlatılırsa reddeder. API de `sbf_` uçlarında `sba_` /
    `sb_probe_` / domain anahtarını 401 ile reddeder; tersi de geçerli.
 2. **Sunucu ajanı komut almaz.** `docs/AGENT-PROTOCOL.md` §1 aynen geçerlidir.
+   `signalbird agent` bash ajanıyla aynı uçları ve alanları kullanır, yalnız
+   `sba_live_` anahtarıyla çalışır, yerel ayarı `/etc/signalbird/agent.conf`
+   (fix ayarından ayrı) okur ve çalıştırdığı komutlar
+   `docs/AGENT-COMMANDS.md`'de sabittir. Bildirdiği sürüm (`AGENT_VERSION`,
+   şu an 1.1.0) paket sürümünden ayrıdır, çünkü sunucu onu sunucu ajanı
+   sürüm kaydıyla (`AgentRelease kind=server`) karşılaştırır.
 3. **Kendini güncelleme yok.** Yeni sürüm npm/brew ile gelir. Kendini
    güncelleyen ve Claude'u izinsiz çalıştıran bir ajan, uzaktan kod
    çalıştırmanın ta kendisidir.

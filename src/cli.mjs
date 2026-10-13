@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { parseArgs } from 'node:util';
+import { agentMain, AGENT_HELP } from './agent/index.mjs';
 import { ApiError } from './api.mjs';
 import { expandHome, loadConfig, parseTarget, saveConfig, sameTarget, targetLabel } from './config.mjs';
 import { claudeVersion } from './fix/agent.mjs';
@@ -33,10 +34,10 @@ Gönderici (her yer)
   signalbird send login --key sb_secret_live_…
       seviye: debug | info | warn | error | critical
 
-Sunucu ajanı
-  signalbird agent …                     Yakında (agent.signalbird'ün yerini alacak)
+${AGENT_HELP}
 
-Ayar: ~/.signalbird/config.json   ·   Sözleşme: PROTOCOL.md
+Ayar: ~/.signalbird/config.json (fix, send) · /etc/signalbird/agent.conf (agent)
+Sözleşme: PROTOCOL.md · docs/AGENT-PROTOCOL.md · docs/AGENT-COMMANDS.md
 `;
 
 function out(...a) {
@@ -336,7 +337,7 @@ export async function main(argv) {
       case 'send':
         return await sendCmd(rest);
       case 'agent':
-        return die('Sunucu ajanı henüz bu pakette değil; yakında `signalbird agent install` olarak gelecek.');
+        return await agentMain(rest);
       case 'version':
       case '--version':
       case '-v':
