@@ -11,7 +11,7 @@ import { ApiError, createClient } from '../api.mjs';
 import { findLink, loadConfig, saveConfig, targetLabel } from '../config.mjs';
 import { log, redact, warn } from '../log.mjs';
 import { FIX_PROTOCOL, VERSION } from '../version.mjs';
-import { claudeVersion, probeClaude, runClaude } from './agent.mjs';
+import { AGENTS, agentName, agentVersion, probeAgent, runAgent } from './agent.mjs';
 import { errText } from './git.mjs';
 import { discoverProjects, suggestRoots } from './discover.mjs';
 import { buildPrompt, extractQuestion, extractSummary, prBody, prTitle } from './prompt.mjs';
@@ -129,15 +129,16 @@ export class FixRunner {
 
   agentStatus() {
     const a = this.state.agent || { status: 'ready' };
-    // Oturum düşmüştü: kullanıcı `claude /login` ya da `fix claude-token`
-    // yaptıysa 10 dakikada bir denenir, çalışıyorsa Janet işe kendisi döner.
+    // Oturum düşmüştü: kullanıcı ajanına yeniden giriş yaptıysa 10 dakikada
+    // bir denenir, çalışıyorsa Janet işe kendisi döner.
     if (a.status === 'auth_required' && Date.now() - (this.lastProbe || 0) > 10 * 60000) {
       this.lastProbe = Date.now();
       try {
-        this.cfg.fix.claude = loadConfig().fix.claude;
+        const fresh = loadConfig().fix;
+        for (const k of ['agent', 'claude', 'codex', 'gemini']) this.cfg.fix[k] = fresh[k];
       } catch {}
-      if (probeClaude(this.cfg).ok) {
-        log('Claude oturumu geri geldi; Janet görev almaya devam ediyor.');
+      if (probeAgent(this.cfg).ok) {
+        log(`${AGENTS[agentName(this.cfg)].label} oturumu geri geldi; Janet görev almaya devam ediyor.`);
         this.setAgentStatus('ready');
         return 'ready';
       }
@@ -205,7 +206,9 @@ export class FixRunner {
 
   async hello() {
     this.reloadLinks();
-    const version = this.claudeVersionCache ?? (this.claudeVersionCache = claudeVersion(this.cfg));
+    const name = agentName(this.cfg);
+    if (this.agentCache?.name !== name) this.agentCache = { name, version: agentVersion(this.cfg, name) };
+    const version = this.agentCache.version;
     const status = version ? this.agentStatus() : 'not_installed';
     const res = await this.api('POST', '/v1/fix/hello', {
       hostname: os.hostname(),
@@ -215,7 +218,8 @@ export class FixRunner {
       links: this.cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
       // Kök bilinmiyorsa alan hiç gönderilmez: sunucudaki son liste silinmesin.
       projects: (this.cfg.fix.roots || []).length ? (this.projects || []).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
-      agents: { claude: { version, status } },
+      // Yalnız seçili ajan bildirilir; panel adını buradan okur.
+      agents: { [name]: { version, status } },
       busy_job_id: this.current?.job.id || null,
     });
 
@@ -406,12 +410,12 @@ export class FixRunner {
         } catch {}
       }, CANCEL_POLL_MS);
 
-      const result = await runClaude({
+      const result = await runAgent({
         cfg: this.cfg,
         cwd: ws.repos.length > 1 ? ws.dir : ws.repos[0].clone,
         prompt: buildPrompt({ job, ws }),
         model: null,
-        timeoutMinutes: job.limits?.timeout_minutes || this.cfg.fix.claude.timeout_minutes || 60,
+        timeoutMinutes: job.limits?.timeout_minutes || this.cfg.fix[agentName(this.cfg)]?.timeout_minutes || 60,
         cancelSignal: abort.signal,
         onLine: (l) => logs.line(l),
       });
@@ -429,13 +433,16 @@ export class FixRunner {
         if (result.failure === 'auth_required' || result.failure === 'rate_limited' || result.failure === 'not_installed') {
           this.setAgentStatus(result.failure);
         }
+        const a = AGENTS[agentName(this.cfg)];
         const why = result.timedOut
           ? `Zaman aşımı (${job.limits?.timeout_minutes || 60} dk).`
           : result.failure === 'auth_required'
-            ? 'Claude oturumu düşmüş. Kalıcı çözüm: terminalde `claude setup-token`, çıkan anahtarla `signalbird fix claude-token`. (Ya da `claude` → /login.) Janet oturum gelince kendisi devam eder; bu görevi panelden "Yeniden dene" ile tekrar kuyruğa alın.'
+            ? `${a.label} oturumu düşmüş. Bilgisayarda: ${a.login}. Janet oturum gelince kendisi devam eder; bu görevi panelden "Yeniden dene" ile tekrar kuyruğa alın.`
             : result.failure === 'rate_limited'
-              ? 'Claude kullanım limiti doldu; makine 30 dk iş almayacak.'
-              : `Claude hata ile bitti (çıkış ${result.exitCode}).`;
+              ? `${a.label} kullanım limiti doldu; makine 30 dk iş almayacak.`
+              : result.failure === 'not_installed'
+                ? `${a.label} bu bilgisayarda bulunamadı: ${a.install}`
+                : `${a.label} hata ile bitti (çıkış ${result.exitCode}).`;
         writeMarker(ws.dir, { status: 'failed' });
         await logs.close();
         await this.report(job.id, { status: 'failed', error: redact(`${why}\n\n${result.tail.slice(-3000)}`).slice(0, 4500) });

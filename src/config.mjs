@@ -28,8 +28,11 @@ export function defaults() {
     fix: {
       key: null,
       workdir: join(homeDir(), 'fix'),
+      // Janet'ın kodu düzelttiği yerel ajan: claude | codex | gemini.
       agent: 'claude',
       claude: { bin: null, model: null, extra_args: [], timeout_minutes: 60 },
+      codex: { bin: null, model: null, extra_args: [], timeout_minutes: 60 },
+      gemini: { bin: null, model: null, extra_args: [], timeout_minutes: 60 },
       // Proje kökleri (`signalbird login` bulur). Altındaki her klasör bir proje.
       roots: [],
       links: [],
@@ -57,6 +60,8 @@ export function loadConfig() {
       ...base.fix,
       ...(raw.fix || {}),
       claude: { ...base.fix.claude, ...(raw.fix?.claude || {}) },
+      codex: { ...base.fix.codex, ...(raw.fix?.codex || {}) },
+      gemini: { ...base.fix.gemini, ...(raw.fix?.gemini || {}) },
       roots: Array.isArray(raw.fix?.roots) ? raw.fix.roots : [],
       links: Array.isArray(raw.fix?.links) ? raw.fix.links : [],
     },

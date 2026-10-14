@@ -371,8 +371,8 @@ Komut: `claude -p --output-format stream-json --verbose --dangerously-skip-permi
 - Ağ / 5xx / 429: 3 deneme, üstel bekleme. Son rapor gönderilemezse
   `state.json`'a yazılır, sonraki turda tekrar.
 - `401`: dur. `403`: bekle. `409 JOB_CLOSED`: işi bırak, yerel durumu temizle.
-- Claude giriş / kota hatası: iş `failed`, `hello.agents.claude.status`
-  `auth_required` / `rate_limited`; bu durumdayken makine iş almaz.
+- Ajan giriş / kota hatası: iş `failed`, `hello.agents.<ajan>.status`
+  `auth_required` / `rate_limited`; bu durumdayken makine iş almaz (§14).
 
 ---
 
@@ -554,3 +554,35 @@ iş kuralı / ürün kararı gerekiyorsa kod değiştirme; son mesajın `SORU:`
 bölümüyle tek, net bir soru sorsun." CLI: son metinde `SORU:` var ve hiçbir
 repoda commit yoksa → `needs_input` (`question` = `SORU:` bölümü). Commit
 varsa normal `pr_open` raporlanır ve soru özetin parçası olarak kalır.
+
+---
+
+## 14. Ajan seçimi: Claude Code, Codex, Gemini CLI (CLI 0.4.0, 14 Eki 2026)
+
+Janet'ın kodu düzelttiği yerel ajan makinede seçilir: `fix.agent` =
+`claude` | `codex` | `gemini` (`signalbird login --agent`, `signalbird fix
+agent`). Protokol numarası DEĞİŞMEZ (3); yalnız `hello.agents` anlamı
+genişler:
+
+- `agents` artık yalnız **seçili** ajanı taşır: `{ "codex": { "version":
+  "codex-cli 0.159.0", "status": "ready" } }`. Eski CLI'lar `claude` anahtarını
+  göndermeye devam eder.
+- API, `agents` içindeki herhangi bir ajan `auth_required` / `rate_limited`
+  ise makineye iş vermez (`FixMachine::agentBlocked`). Panel ajan adını
+  anahtardan okur.
+
+Çalıştırma (hepsinde prompt stdin'den, görev klasöründe, izin sormadan):
+
+| Ajan | Komut | Akış |
+| --- | --- | --- |
+| claude | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions` | `result` olayı sonucu ve hatayı taşır |
+| codex | `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --output-last-message <dosya> -` | son cevap dosyadan; `turn.failed` / `error` = hata |
+| gemini | `gemini --yolo --output-format stream-json "Yukarıdaki görevi uygula."` | `message` parçaları birleşir; `result.status` = sonuç |
+
+Oturum denetimi: Claude ve Gemini tek kelimelik istek, Codex `codex login
+status`. Ajan ortamı `fix.<ajan>.env` ile verilir (`CLAUDE_CODE_OAUTH_TOKEN`,
+`CODEX_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_CLOUD_PROJECT`).
+
+**Ücret:** yapay zekâ çağrısını Signalbird yapmaz. Ajan kullanıcının kendi
+bilgisayarında, kendi hesabıyla çalışır; kullanım ücreti ve limitler onunla
+sağlayıcısı arasındadır. Janet bu yüzden ayrıca ücretlendirilmez.

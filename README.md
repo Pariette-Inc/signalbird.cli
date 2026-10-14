@@ -4,7 +4,7 @@ The command line tool for [Signalbird](https://signalbird.io). One package, thre
 
 | Role | What it does | Where it runs |
 | --- | --- | --- |
-| **Janet** (`signalbird login`, `signalbird fix …`) | Takes an alert from Signalbird Radio, hands it to Claude Code on your computer, and opens a pull request with the fix. You review and merge. | Your development machine |
+| **Janet** (`signalbird login`, `signalbird fix …`) | Takes an alert from Signalbird Radio, hands it to the AI agent on your computer (Claude Code, Codex or Gemini CLI), and opens a pull request with the fix. You review and merge. | Your development machine |
 | **Sender** (`signalbird send …`) | Writes a single event to a Radio channel from a deploy script, a cron job or any shell. | Anywhere |
 | **Server agent** (`signalbird agent …`) | Reports load, memory, disk, services, databases and log lines to the Servers screen. Receives no commands. | Your Linux server (root) |
 
@@ -34,7 +34,7 @@ signalbird login
 
 1. **Project folder.** Finds the folder your projects live in (for example `~/git`) or asks for it. Every folder below it is a project: `~/git/adall` holds `adall.api`, `adall.web`, `app.adall`. Only folder and repository **names** go to Signalbird, never paths.
 2. **Account.** Opens your browser; you click **Connect this computer** while signed in to Signalbird. No key to copy. The computer belongs to **your account** and can take Janet jobs from every team you are a member of.
-3. **Checks.** git, `gh` and Claude Code, including whether the Claude session actually works.
+3. **Checks.** git, `gh` and your AI agent (Claude Code, Codex or Gemini CLI), including whether its session actually works.
 4. **Service.** Installs a background service (launchd on macOS, `systemd --user` on Linux) that starts with the computer.
 
 Then, in the panel under **Integrations → Janet**:
@@ -47,19 +47,40 @@ Then, in the panel under **Integrations → Janet**:
 ### How a job runs
 
 1. An alert arrives. Each repository of the project is cloned with `git clone --shared` into `~/.signalbird/fix/jobs/SBF-…/` on a new `janet/SBF-…` branch. Your working copy is never touched and the clone does not show up in your editor.
-2. Claude reads the alert, the conversation so far and every repository, decides where the problem is and commits the fix. The alert text sits in a separate block marked as untrusted data, not instructions.
+2. The agent reads the alert, the conversation so far and every repository, decides where the problem is and commits the fix. The alert text sits in a separate block marked as untrusted data, not instructions.
 3. Repositories without changes are removed right away. Changed ones are pushed and a pull request is opened for each.
 4. The panel shows the live log, Janet's summary and the PR links. If Janet needs more information, the job moves to **Waiting for you**.
 5. **Resolved**, **Reject** or **Stop** deletes the local clone. Writing to Janet on an open job continues on the same branch and the same PR.
+
+### AI agent: Claude Code, Codex or Gemini CLI
+
+Janet does not write the code itself; it runs the AI agent on your computer. Three are supported:
+
+| Agent | Install | Sign in |
+| --- | --- | --- |
+| `claude` · Claude Code | `npm i -g @anthropic-ai/claude-code` | `claude setup-token`, then `signalbird fix claude-token` |
+| `codex` · Codex (ChatGPT) | `npm i -g @openai/codex` | `codex login` (with your ChatGPT account) or `CODEX_API_KEY` via `--key` |
+| `gemini` · Gemini CLI | `npm i -g @google/gemini-cli` | Google sign-in via `gemini`, or `GEMINI_API_KEY` via `--key`; Workspace accounts add `--env GOOGLE_CLOUD_PROJECT=<project>` |
+
+`signalbird login` picks the one that is installed (order: claude, codex, gemini). To switch:
+
+```bash
+signalbird fix agent            # which one is selected, which are installed
+signalbird fix agent codex      # tests it, saves it, restarts the service
+signalbird fix agent gemini --key AIza…
+```
+
+**Why is Janet free?** Because the AI runs on your computer with your own account: your Claude, ChatGPT or Gemini subscription. Signalbird makes no AI calls and does not cover their cost or limits. Usage fees and limits are between you and your agent's provider; if the limit is hit, Janet stops sending jobs to that computer for 30 minutes.
 
 ### Janet commands
 
 | Command | |
 | --- | --- |
-| `signalbird login [--root ~/git] [--no-service] [--api URL]` | Connects this computer with your account (browser approval), finds the project folder, installs the service. Run it once. |
+| `signalbird login [--root ~/git] [--agent claude\|codex\|gemini] [--no-service] [--api URL]` | Connects this computer with your account (browser approval), finds the project folder, installs the service. Run it once. |
 | `signalbird logout` | Removes this computer's session and its service. |
-| `signalbird fix status` | Service, connection, Claude session and open job folders. |
-| `signalbird fix doctor` | Checks git, gh, Claude (including the session) and the API; clears a stale "sign in to Claude" flag once Claude works again. |
+| `signalbird fix status` | Service, connection, selected agent and open job folders. |
+| `signalbird fix doctor` | Checks git, gh, the selected agent (including the session) and the API; clears a stale "sign in" flag once the agent works again. |
+| `signalbird fix agent [claude\|codex\|gemini] [--key …] [--env NAME=value]` | Shows or switches the AI agent Janet uses (tests it, saves it, restarts the service). |
 | `signalbird fix claude-token [token]` | Connects Janet to Claude with a long-lived token from `claude setup-token`. Pasting works even when the terminal splits the token over two lines. |
 | `signalbird fix links` | Local links and the projects found under your folder. |
 | `signalbird fix link <domain\|#channel> <folder> [--base branch] [--repos a,b]` | Pins a domain or channel to a folder on this computer. Overrides the panel's automatic match. |
@@ -73,7 +94,7 @@ Then, in the panel under **Integrations → Janet**:
 
 **Target branch.** `--base` first, then the first branch that exists out of `test`, `development`, `develop`, `dev`, then the repository default. For a different branch per repository, set `links[].base = {"adall.api": "test", "app.adall": "main"}` in `~/.signalbird/config.json`.
 
-### Claude session
+### Claude session (Claude Code only)
 
 Janet runs the `claude` command in a terminal session, which is separate from the Claude desktop app. If the panel says the Claude session expired:
 
@@ -88,14 +109,14 @@ The token is stored in `~/.signalbird/config.json` (0600) and passed only to the
 
 - Node.js 20+, git
 - [GitHub CLI](https://cli.github.com) signed in (`gh auth login`)
-- [Claude Code](https://docs.claude.com/claude-code) installed and signed in
+- An AI agent installed and signed in: [Claude Code](https://docs.claude.com/claude-code), [Codex](https://github.com/openai/codex) or [Gemini CLI](https://github.com/google-gemini/gemini-cli)
 
 ### Safety
 
 - Janet never pushes to the target branch. It only pushes `janet/…` branches and opens pull requests. No force push.
 - It refuses to run as `root`. It is meant for your development machine, not for servers.
 - Local paths are never sent. The API only knows domain, channel and folder names.
-- Claude runs without permission prompts (`--dangerously-skip-permissions`) inside the job folder, with your user's rights. Do not turn on automatic fixing for channels fed by sources you do not trust.
+- The agent runs without permission prompts (Claude `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`, Gemini `--yolo`) inside the job folder, with your user's rights. Do not turn on automatic fixing for channels fed by sources you do not trust.
 - Known secret patterns (`sb_*_live_`, `sk-`, `ghp_`, `AKIA…`) are masked before a log line reaches the panel.
 
 ---

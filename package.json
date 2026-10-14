@@ -1,7 +1,7 @@
 {
   "name": "signalbird-cli",
-  "version": "0.3.0",
-  "description": "Signalbird komut satırı: telsiz alarmlarını yerel AI ajanına düzelttirip PR açar, sunucu ölçümü gönderir.",
+  "version": "0.4.0",
+  "description": "Signalbird CLI: Janet (fixes Radio alerts with your own Claude Code, Codex or Gemini CLI and opens a PR), event sender and server agent",
   "type": "module",
   "bin": {
     "signalbird": "bin/signalbird.mjs"
@@ -29,5 +29,11 @@
     "url": "git+https://github.com/Pariette-Inc/signalbird.cli.git"
   },
   "author": "ahmet selim çil <ahmet@pariette.com>",
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": [
+    "chatgpt",
+    "claude",
+    "codex",
+    "gemini"
+  ]
 }
