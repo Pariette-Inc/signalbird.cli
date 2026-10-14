@@ -14,7 +14,7 @@ import { FIX_PROTOCOL, VERSION } from '../version.mjs';
 import { claudeVersion, probeClaude, runClaude } from './agent.mjs';
 import { errText } from './git.mjs';
 import { discoverProjects, suggestRoots } from './discover.mjs';
-import { buildPrompt, extractSummary, prBody, prTitle } from './prompt.mjs';
+import { buildPrompt, extractQuestion, extractSummary, prBody, prTitle } from './prompt.mjs';
 import { finalize, ghOpenPr, jobDir, listJobs, prepare, removeJob, writeMarker } from './workspace.mjs';
 
 const TICK_MS = 60000;
@@ -444,6 +444,7 @@ export class FixRunner {
       }
 
       const summary = redact(extractSummary(result.finalText));
+      const question = extractQuestion(redact(result.finalText));
       const title = prTitle(job, summary);
       logs.line('● ajan bitti; değişiklikler push ediliyor');
 
@@ -475,6 +476,10 @@ export class FixRunner {
         writeMarker(ws.dir, { status: 'failed' });
         await this.report(job.id, { status: 'failed', summary, error: fin.problems.join('\n').slice(0, 4500) });
         log(`✗ ${job.code}: ${fin.problems[0]}`);
+      } else if (question) {
+        // Protokol 3 (§13.5): Janet bilgi istedi, kod değiştirmedi.
+        await this.report(job.id, { status: 'needs_input', question, summary });
+        log(`? ${job.code}: Janet soru sordu — ${question.split('\n')[0].slice(0, 120)}`);
       } else {
         await this.report(job.id, { status: 'no_change', summary });
         log(`○ ${job.code}: kod değişikliği yok (${mins} dk).`);

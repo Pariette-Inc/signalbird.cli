@@ -11,7 +11,7 @@ import { assertFixAllowed, fixClient, FixRunner } from './fix/runner.mjs';
 import { install, logFile, restart, serviceStatus, uninstall } from './fix/service.mjs';
 import { listJobs, removeJob } from './fix/workspace.mjs';
 import { send } from './send.mjs';
-import { ask, c, ui } from './ui.mjs';
+import { ask, askSecret, c, ui } from './ui.mjs';
 import { FIX_PROTOCOL, VERSION } from './version.mjs';
 
 const HELP = `signalbird ${VERSION}
@@ -194,9 +194,9 @@ async function fixClaudeToken(argv) {
   let token = positionals[0];
   if (!token) {
     ui.line(c.dim('Anahtarı almak için başka bir terminalde: claude setup-token'));
-    token = await ask('Claude anahtarını yapıştırın (sk-ant-oat…)', '');
+    token = await askSecret('Claude anahtarını yapıştırın (sk-ant-oat…; iki satıra bölünmüşse de olduğu gibi yapıştırın)');
   }
-  token = String(token || '').trim();
+  token = String(token || '').replace(/\s+/g, '');
   if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(token)) die('Bu bir Claude anahtarına benzemiyor (sk-ant-… bekleniyor). Almak için: claude setup-token');
   cfg.fix.claude.env.CLAUDE_CODE_OAUTH_TOKEN = token;
   const sp = ui.spinner('Claude deneniyor…');

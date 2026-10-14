@@ -76,3 +76,27 @@ test('describeEvent ve classifyFailure', () => {
   assert.equal(classifyFailure('Invalid API key · Please run /login'), 'auth_required');
   assert.equal(classifyFailure('HTTP 401 in test output of user code'), null);
 });
+
+test('protokol 3: SORU çıkarma ve prompt\'ta konuşma', async () => {
+  const { extractQuestion } = await import('../src/fix/prompt.mjs');
+  assert.equal(extractQuestion('ÖZET: x\nSORU: Hangi tabloyu kullanalım: contracts mı agreements mı?'), 'Hangi tabloyu kullanalım: contracts mı agreements mı?');
+  assert.equal(extractQuestion('ÖZET: x\nSORU: <yalnız müşteriden bilgi gerekiyorsa>'), null);
+  assert.equal(extractQuestion('ÖZET: x\nSORU: yok'), null);
+  assert.equal(extractQuestion('ÖZET: tamam'), null);
+  assert.equal(extractQuestion('SORU: a mı b mi?\nRİSK: düşük'), 'a mı b mi?');
+
+  const ws = { branch: 'janet/SBF-1', repos: [{ name: 'api', slug: 'O/api', base: 'test' }] };
+  const job = {
+    code: 'SBF-1',
+    event: { level: 'error', message: 'boom' },
+    conversation: [
+      { author: 'janet', kind: 'question', body: 'contracts mı agreements mı?' },
+      { author: 'user', kind: 'message', body: 'contracts kullan', user: { name: 'Ahmet' } },
+    ],
+  };
+  const p = buildPrompt({ job, ws });
+  assert.match(p, /## Bu görevdeki konuşma/);
+  assert.match(p, /### Janet \(soru\)\ncontracts mı agreements mı\?/);
+  assert.match(p, /### Müşteri \(Ahmet\)\ncontracts kullan/);
+  assert.match(p, /## Emin değilsen sor/);
+});
