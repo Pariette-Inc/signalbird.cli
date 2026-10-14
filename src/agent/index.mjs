@@ -1,4 +1,4 @@
-// `signalbird agent …` — sunucu ajanı rolü. Sözleşme: docs/AGENT-PROTOCOL.md.
+// `signalbird agent …`: sunucu ajanı rolü. Sözleşme: docs/AGENT-PROTOCOL.md.
 // Düzeltici (fix) rolünden tamamen ayrıdır: farklı anahtar (sba_live_),
 // farklı ayar dosyası (/etc/signalbird/agent.conf), root olarak çalışır.
 
@@ -14,7 +14,7 @@ import { makeLogger } from './logger.mjs';
 import { AgentRunner, AuthError } from './runner.mjs';
 import { BIN, ephemeralBin, installUnit, uninstallUnit, unitState } from './service.mjs';
 
-export const AGENT_HELP = `Sunucu ajanı (müşteri sunucusu, root) — ölçüm + log + beklenen sinyal; komut ALMAZ
+export const AGENT_HELP = `Sunucu ajanı (müşteri sunucusu, root): ölçüm + log + beklenen sinyal; komut ALMAZ
   sudo signalbird agent install --token=sba_live_… [--api URL] [--allow=/var/log,/srv/app/logs]
                                          Ayarı yazar, systemd servisini kurar ve başlatır
   signalbird agent run                   Sürekli çalışır (servis bunu kullanır)

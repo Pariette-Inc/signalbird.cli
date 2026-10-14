@@ -1,213 +1,188 @@
-# signalbird CLI
+# signalbird-cli
 
-Signalbird'ün komut satırı aracı. Üç işi var:
+The command line tool for [Signalbird](https://signalbird.io). One package, three jobs:
 
-| Rol | Ne yapar | Nerede |
+| Role | What it does | Where it runs |
 | --- | --- | --- |
-| **Janet** (`signalbird login`, `signalbird fix`) | Signalbird'e düşen alarmı bilgisayarınızdaki Claude'a verir; Claude kodu düzeltir, Janet dalı push edip PR açar. Panelde "Çözüldü" dediğinizde yerel klon silinir. | Geliştirici bilgisayarı |
-| **Gönderici** (`signalbird send`) | Telsize tek mesaj yazar (deploy, cron, betik). | Her yer |
-| **Sunucu ajanı** (`signalbird agent`) | Ölçüm, log, beklenen sinyal gönderir; **komut almaz**. agent.signalbird (bash) ajanının yerini alır. | Sunucu (root) |
+| **Janet** (`signalbird login`, `signalbird fix …`) | Takes an alert from Signalbird Radio, hands it to Claude Code on your computer, and opens a pull request with the fix. You review and merge. | Your development machine |
+| **Sender** (`signalbird send …`) | Writes a single event to a Radio channel from a deploy script, a cron job or any shell. | Anywhere |
+| **Server agent** (`signalbird agent …`) | Reports load, memory, disk, services, databases and log lines to the Servers screen. Receives no commands. | Your Linux server (root) |
 
-yazar: ahmet selim çil | ahmet@pariette.com · sözleşme: [PROTOCOL.md](PROTOCOL.md)
+[Türkçe README](README.tr.md) · [Documentation](https://signalbird.io/en/sdk/cli) · [Protocol](PROTOCOL.md) · MIT
+
+```bash
+npm i -g signalbird-cli
+signalbird --version
+```
+
+Requires **Node.js 20+**. The package never updates itself; to upgrade, run the same `npm i -g signalbird-cli` again.
+
+> The CLI prints its messages in Turkish. Command names, flags and exit codes are the same in every language.
 
 ---
 
-## Janet: bilgisayarda bir kez, gerisi panelden
+## Janet: fixes Radio alerts and opens a PR
+
+You do two things once on your computer. Everything after that happens in the Signalbird panel.
 
 ```bash
 npm i -g signalbird-cli
 signalbird login
 ```
 
-`signalbird login`:
-1. Tarayıcıyı açar; Signalbird hesabınızla **"Bu bilgisayarı bağla"** dersiniz.
-   Anahtar kopyalamak yok. Bilgisayar **hesabınıza** bağlanır ve üyesi
-   olduğunuz her takımın Janet işlerini alabilir.
-2. Projelerinizin durduğu klasörü bulur (ör. `/Volumes/solidCloud/git`) ya da
-   sorar. Altındaki her klasör bir projedir (`adall` → `adall.api`,
-   `adall.web`, `app.adall`). Panele yalnız **adlar** gider, yol gitmez.
-3. Claude Code ve `gh` oturumunu kontrol eder, eksik varsa söyler.
-4. Arka plan servisini kurar (launchd / systemd --user).
+`signalbird login` walks through four steps:
 
-Sonra her şey panelde (**Entegrasyon → Janet**):
-- **Projeler:** `adall.io → adall` gibi eşlemeler çoğunlukla kendiliğinden
-  bulunur; yanlışsa listeden seçersiniz.
-- Kanal ayarında **"Janet otomatik düzeltsin"**i açın ya da bir alarmda
-  **"Janet'a aktar"**a basın.
-- Klasöre yeni proje eklerseniz bir dakika içinde panelde görünür.
+1. **Project folder.** Finds the folder your projects live in (for example `~/git`) or asks for it. Every folder below it is a project: `~/git/adall` holds `adall.api`, `adall.web`, `app.adall`. Only folder and repository **names** go to Signalbird, never paths.
+2. **Account.** Opens your browser; you click **Connect this computer** while signed in to Signalbird. No key to copy. The computer belongs to **your account** and can take Janet jobs from every team you are a member of.
+3. **Checks.** git, `gh` and Claude Code, including whether the Claude session actually works.
+4. **Service.** Installs a background service (launchd on macOS, `systemd --user` on Linux) that starts with the computer.
 
-### Gelişmiş: yerel bağ
+Then, in the panel under **Integrations → Janet**:
 
-Paneldeki eşleme yerine bilgisayarda sabitlemek isterseniz (ya da farklı bir
-klasör/dal için):
+- **Projects:** `adall.io → adall` style matches are usually found on their own. If one is wrong, pick the right folder from the list.
+- Turn on **Janet fixes automatically** for a Radio channel, or press **Send to Janet** on a single alert.
+- Talk to Janet on the job page. Janet can ask you a question when the alert is ambiguous; the job waits for your answer.
+- Press **Resolved** when you are done. The local clone is deleted.
 
-```
-$ signalbird fix link adall.io ~/git/adall
-adall.io → /Volumes/solidCloud/git/adall
-  ✓ adall.api                Pariette-Inc/adall.api               → test
-  ✓ adall.web                Pariette-Inc/adall.web               → test
-  ✓ app.adall                Pariette-Inc/app.adall               → test
-```
+### How a job runs
 
-- Hedef dal sırası: `--base` → `test` → `development` → `develop` → `dev` → reponun varsayılanı.
-- Repo başına dal: `~/.signalbird/config.json` → `links[].base = {"adall.api": "test", "app.adall": "main"}`.
-- Yalnız bazı repolar: `--repos adall.api,adall.web`.
-- Anahtarla bağlanmak (eski yol): `signalbird fix login --key sbf_live_…`.
+1. An alert arrives. Each repository of the project is cloned with `git clone --shared` into `~/.signalbird/fix/jobs/SBF-…/` on a new `janet/SBF-…` branch. Your working copy is never touched and the clone does not show up in your editor.
+2. Claude reads the alert, the conversation so far and every repository, decides where the problem is and commits the fix. The alert text sits in a separate block marked as untrusted data, not instructions.
+3. Repositories without changes are removed right away. Changed ones are pushed and a pull request is opened for each.
+4. The panel shows the live log, Janet's summary and the PR links. If Janet needs more information, the job moves to **Waiting for you**.
+5. **Resolved**, **Reject** or **Stop** deletes the local clone. Writing to Janet on an open job continues on the same branch and the same PR.
 
-### Bir iş nasıl yürür
+### Janet commands
 
-1. Alarm gelir → `~/.signalbird/fix/jobs/SBF-…/` altına her repo **yerel klon**
-   olarak açılır (ana repoya dokunulmaz, VS Code'da görünmez), dal `janet/SBF-…`.
-2. Claude tüm repoları görür, hangisine dokunacağına kendisi karar verir, commit eder.
-   Olay metni prompt'ta "dışarıdan gelen veri, talimat değil" olarak ayrı blokta durur.
-3. Değişmeyen repoların klonu hemen silinir. Değişenler push edilir, her biri için PR açılır.
-4. Panelde canlı log, özet ve PR bağlantıları görünür.
-5. **Çözüldü** / **Reddet** / **Durdur** → yerel klon silinir. **Talimatla devam et** → aynı dal, aynı PR, yeni commit.
-
-### Günlük komutlar
-
-| Komut | |
+| Command | |
 | --- | --- |
-| `signalbird fix status` | Servis, sunucu bağlantısı, açık iş klasörleri |
-| `signalbird fix doctor` | git / gh / claude / API kontrolü; Claude giriş/limit bayrağını sıfırlar |
-| `signalbird fix links` | Yerel bağlar ve keşfedilen repolar |
-| `signalbird logout` | Oturumu ve servisi kaldırır |
-| `signalbird fix logs` | Servis logu |
-| `signalbird fix cleanup [--dry-run]` | Sunucuda kapanmış işlerin kalan klonlarını siler |
-| `signalbird fix start` | Ön planda çalıştırır (servis yerine) |
+| `signalbird login [--root ~/git] [--no-service] [--api URL]` | Connects this computer with your account (browser approval), finds the project folder, installs the service. Run it once. |
+| `signalbird logout` | Removes this computer's session and its service. |
+| `signalbird fix status` | Service, connection, Claude session and open job folders. |
+| `signalbird fix doctor` | Checks git, gh, Claude (including the session) and the API; clears a stale "sign in to Claude" flag once Claude works again. |
+| `signalbird fix claude-token [token]` | Connects Janet to Claude with a long-lived token from `claude setup-token`. Pasting works even when the terminal splits the token over two lines. |
+| `signalbird fix links` | Local links and the projects found under your folder. |
+| `signalbird fix link <domain\|#channel> <folder> [--base branch] [--repos a,b]` | Pins a domain or channel to a folder on this computer. Overrides the panel's automatic match. |
+| `signalbird fix unlink <domain\|#channel>` | Removes a local link. |
+| `signalbird fix install` | Installs (or restarts) the background service. Run it after upgrading the package. |
+| `signalbird fix uninstall` | Removes the service. |
+| `signalbird fix start` | Runs in the foreground instead of the service. |
+| `signalbird fix logs [-n 100]` | The end of the service log. |
+| `signalbird fix cleanup [--dry-run] [--force]` | Deletes local clones of jobs that are already closed on the server. |
+| `signalbird fix login --key sbf_live_… [--api URL]` | Advanced: connects with a team key instead of your account. |
 
-### Gereksinimler
+**Target branch.** `--base` first, then the first branch that exists out of `test`, `development`, `develop`, `dev`, then the repository default. For a different branch per repository, set `links[].base = {"adall.api": "test", "app.adall": "main"}` in `~/.signalbird/config.json`.
 
-- Node 20+, git, [gh](https://cli.github.com) (`gh auth login` yapılmış)
-- [Claude Code](https://docs.claude.com/claude-code) kurulu ve giriş yapılmış (`claude` bir kez çalıştırılıp oturum açılmış)
+### Claude session
 
-### Güvenlik
+Janet runs the `claude` command in a terminal session, which is separate from the Claude desktop app. If the panel says the Claude session expired:
 
-- Düzeltici `root` olarak ya da `sbf_live_` dışında bir anahtarla çalışmaz; sunucuya kurulmak için değildir.
-- Hiçbir zaman hedef dala doğrudan push etmez; yalnız `janet/…` dalı + PR. Force push yok.
-- Yerel yollar sunucuya gönderilmez; API yalnız domain/kanal adını bilir.
-- Kendini güncellemez. Yeni sürüm: `npm i -g signalbird-cli`.
-- Claude izin sormadan çalışır (`--dangerously-skip-permissions`) — yalnız iş klasöründe, ama bilgisayarınızın yetkileriyle. Güvenmediğiniz kaynaklardan beslenen kanallarda düzeltmeyi açmayın.
-- Log panele gitmeden önce bilinen anahtar desenleri (`sb_*_live_`, `sk-`, `ghp_`, `AKIA…`) maskelenir.
+```bash
+claude setup-token              # prints a long-lived token
+signalbird fix claude-token     # paste it here
+```
+
+The token is stored in `~/.signalbird/config.json` (0600) and passed only to the `claude` process.
+
+### Requirements
+
+- Node.js 20+, git
+- [GitHub CLI](https://cli.github.com) signed in (`gh auth login`)
+- [Claude Code](https://docs.claude.com/claude-code) installed and signed in
+
+### Safety
+
+- Janet never pushes to the target branch. It only pushes `janet/…` branches and opens pull requests. No force push.
+- It refuses to run as `root`. It is meant for your development machine, not for servers.
+- Local paths are never sent. The API only knows domain, channel and folder names.
+- Claude runs without permission prompts (`--dangerously-skip-permissions`) inside the job folder, with your user's rights. Do not turn on automatic fixing for channels fed by sources you do not trust.
+- Known secret patterns (`sb_*_live_`, `sk-`, `ghp_`, `AKIA…`) are masked before a log line reaches the panel.
 
 ---
 
-## Sunucu ajanı
-
-Sunucunun durumunu (yük, CPU, bellek, disk, servis, port, süreç, socket.io,
-veritabanı) okur, izinli log dosyalarındaki yeni satırları Telsiz'e yollar ve
-beklenen sinyalleri ("yedeği aldım") iletir. Sözleşme:
-[docs/AGENT-PROTOCOL.md](docs/AGENT-PROTOCOL.md) (protokol 1, bash ajanıyla
-birebir aynı uçlar ve alanlar).
-
-**Gereksinim: Node 20+** ve Linux + systemd (kurulum için). macOS'ta
-`signalbird agent run` ön planda en iyi çabayla çalışır; servis kurulmaz.
-
-### Kurulum
+## Sender: one event from any shell
 
 ```bash
-# 1. Node 20+ (yoksa): https://nodejs.org ya da dağıtımın nodesource paketi
-node --version
+signalbird send login --key sb_secret_live_…
+signalbird send error "payment queue stopped" --channel adallCritical --source deploy
+```
 
-# 2. Paketi KÜRESEL kurun (npx ile servis kurulmaz: dosyalar geçici klasörde kalır)
-sudo npm i -g signalbird-cli
+| Command | |
+| --- | --- |
+| `signalbird send <level> <message> --channel <channel> [--key …] [--source x] [--context '{"a":1}']` | Writes one event. Levels: `debug`, `info`, `warn`, `error`, `critical`. `-c` is short for `--channel`. |
+| `signalbird send login --key sb_secret_live_… [--api URL]` | Saves the key so later calls do not need `--key`. |
 
-# 3. Panel → Sunucular: sunucu kaydını açarken gösterilen anahtarı kopyalayın (sba_live_…)
+Key lookup order: `--key`, then the `SIGNALBIRD_KEY` environment variable, then `config.json`. Notification rules (who gets called, quiet hours) live in the panel, not in your script.
+
+---
+
+## Server agent: the inside view of a Linux server
+
+Reads load, CPU, memory, swap, disk and inodes, systemd services, listening ports, top processes, MySQL/MariaDB/PostgreSQL and Socket.io health. Sends new lines from allowed log files to Radio and forwards expected signals ("the backup finished"). **It accepts no commands**: the panel can only change settings (which metric, which interval, which log).
+
+Linux with systemd is required for the service. On macOS `signalbird agent run` works in the foreground for testing.
+
+```bash
+sudo npm i -g signalbird-cli          # install globally, npx cannot install a service
 sudo signalbird agent install --token=sba_live_…
-#   --allow=/var/log,/srv/app/storage/logs   panelden okunabilecek log kökleri (varsayılan /var/log)
-#   --api=https://live.signalbird.io/api     yalnız test/yerel API için
-
-# 4. Kontrol
 sudo signalbird agent status
 journalctl -u signalbird-agent -f
 ```
 
-`install` önce anahtarı Signalbird'e dener (yanlış anahtar ayara yazılmaz),
-sonra `/etc/signalbird/agent.conf` (0600) ve
-`/etc/systemd/system/signalbird-agent.service` yazar ve servisi başlatır.
-Birim `signalbird agent run` çalıştırır, root olarak ve `ProtectSystem=strict`
-ile; yazabildiği tek yerler `/var/lib/signalbird` ve `/var/log`'dur.
+The token is shown in **Servers → Add server**. `install` checks the token with Signalbird first (a wrong token is never written), then writes `/etc/signalbird/agent.conf` (0600) and `/etc/systemd/system/signalbird-agent.service` and starts it. The unit runs as root with `ProtectSystem=strict`; it can only write to `/var/lib/signalbird` and `/var/log`.
 
-**Bash ajanından geçiş.** Birim adı ve dosyalar aynıdır: `install` mevcut
-`agent.conf`'u korur (yalnız `token` ve `api_base` güncellenir, veritabanı
-satırları kalır), log konumlarını `/var/lib/signalbird/state`'ten okumaya
-devam eder ve çalışan bash servisinin yerine geçer. Eski
-`/usr/local/bin/signalbird-agent` dosyası artık kullanılmaz, silinebilir.
-
-### Komutlar
-
-| Komut | |
+| Command | |
 | --- | --- |
-| `sudo signalbird agent install --token=sba_live_… [--api URL] [--allow=…]` | Ayar + systemd servisi |
-| `signalbird agent run` | Sürekli çalışır (servis bunu kullanır) |
-| `sudo signalbird agent once` | Tek tur: ayar, log, dosya sinyalleri, ölçüm |
-| `sudo signalbird agent signal <anahtar> [ok\|fail] [mesaj]` | Beklenen sinyal; `fail` alarmı anında çalar |
-| `sudo signalbird agent status` | Yerel ayar, servis, bağlantı denemesi |
-| `sudo signalbird agent uninstall` | Servisi kaldırır; ayar ve log konumları kalır |
-| `signalbird agent version` | Ajan sürümü (`1.1.0`; CLI paket sürümünden ayrıdır) |
+| `sudo signalbird agent install --token=sba_live_… [--api URL] [--allow=/var/log,/srv/app/logs]` | Writes the config, installs and starts the systemd service. `--allow` sets the folders the panel may read logs from (default `/var/log`). |
+| `signalbird agent run` | Runs continuously (the service uses this). |
+| `sudo signalbird agent once` | One round: settings, logs, file signals, metrics. Good for testing. |
+| `sudo signalbird agent signal <key> [ok\|fail] [message]` | Sends an expected signal. `fail` raises the alarm immediately. |
+| `sudo signalbird agent status` | Local config, service state and a connection test. |
+| `sudo signalbird agent uninstall` | Removes the service. Config and state files stay. |
+| `signalbird agent version` | Agent protocol version (separate from the package version). |
 
-Yedek betiğine örnek:
+Backup script example:
 
 ```bash
-mysqldump … | gzip > /var/backups/db.sql.gz \
-  && signalbird agent signal db-backup ok "$(du -h /var/backups/db.sql.gz | cut -f1)" \
-  || signalbird agent signal db-backup fail "mysqldump çıkış kodu $?"
+if mysqldump --all-databases | gzip > /var/backups/db.sql.gz; then
+  signalbird agent signal db-backup ok "$(du -h /var/backups/db.sql.gz | cut -f1)"
+else
+  signalbird agent signal db-backup fail "mysqldump failed"
+fi
 ```
 
-### Veritabanı izleme
-
-Panelde "veritabanı" açıldığında bağlantı bilgisi **yalnız** yerel ayardan
-okunur, Signalbird'e gönderilmez. Salt okunur bir kullanıcı verin:
+Database credentials stay in `/etc/signalbird/agent.conf` and are never sent. Give the agent a read-only user:
 
 ```ini
-# /etc/signalbird/agent.conf
 db_driver=mysql        # mysql | mariadb | pgsql
 db_host=127.0.0.1
 db_port=3306
 db_user=signalbird_ro
 db_pass=…
-db_name=penyu
+db_name=shop
 ```
 
-`mysql` / `psql` istemcisi sunucuda kurulu olmalıdır.
-
-### Güvenlik
-
-- Ajan **komut almaz**. Panelden gelen tek şey ayardır (hangi ölçüm, hangi
-  aralık, hangi log). Çalıştırılan komutların tam listesi:
-  [docs/AGENT-COMMANDS.md](docs/AGENT-COMMANDS.md); liste kodda sabittir.
-- Panelden seçilen log yolu yerel `allow_paths` altında değilse okunmaz
-  (sembolik bağla kaçış engellenir). Signalbird hesabı ele geçse bile yeni
-  bir dosya okutulamaz.
-- Socket ölçümü yalnız `127.0.0.1` / `localhost` / `[::1]` adresine gider,
-  yönlendirme izlenmez.
-- Yalnız `sba_live_…` anahtarı kabul edilir. 401'de servis durur (systemd
-  yeniden başlatmaz); 403 `MODULE_DISABLED`'da bekler, modül açılınca devam eder.
-- Kendini güncellemez. Yeni sürüm bildirimi günlüğe düşer; güncelleme:
-  `sudo npm i -g signalbird-cli && sudo systemctl restart signalbird-agent`.
+The full list of commands the agent runs is fixed in code and documented in [docs/AGENT-COMMANDS.md](docs/AGENT-COMMANDS.md). A log path chosen in the panel that is not under `--allow` is never read, symbolic links included.
 
 ---
 
-## Gönderici
+## Files and environment
 
-```bash
-signalbird send login --key sb_secret_live_…
-signalbird send error "ödeme kuyruğu durdu" --channel adallCritical --source deploy
-```
+| | |
+| --- | --- |
+| `~/.signalbird/config.json` | Janet and sender settings (0600). Override with `SIGNALBIRD_CONFIG`, or move the whole folder with `SIGNALBIRD_HOME`. |
+| `~/.signalbird/fix/jobs/` | Job clones. Deleted when a job is resolved, rejected or stopped. |
+| `/etc/signalbird/agent.conf` | Server agent settings (0600). |
+| `SIGNALBIRD_NO_BROWSER=1` | `signalbird login` prints the approval link instead of opening a browser (also automatic over SSH). |
+| `NO_COLOR=1` | Plain output without colors. |
 
-Anahtar sırası: `--key` → `SIGNALBIRD_KEY` → `config.json`.
-
----
-
-## Ayar
-
-`~/.signalbird/config.json` (0600, fix + send). Ayrıntı: [PROTOCOL.md §8](PROTOCOL.md).
-Sunucu ajanı: `/etc/signalbird/agent.conf` (0600). Ayrıntı: [docs/AGENT-PROTOCOL.md §5](docs/AGENT-PROTOCOL.md).
-Test/yerel API için: `signalbird fix login --key … --api http://localhost:8000/api`.
-
-## Geliştirme
+## Development
 
 ```bash
 npm install
 npm test
 ```
+
+Contracts: [PROTOCOL.md](PROTOCOL.md) (Janet and sender), [docs/AGENT-PROTOCOL.md](docs/AGENT-PROTOCOL.md) (server agent).
+
+ahmet selim çil | ahmet@pariette.com

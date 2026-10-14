@@ -479,7 +479,7 @@ export class FixRunner {
       } else if (question) {
         // Protokol 3 (§13.5): Janet bilgi istedi, kod değiştirmedi.
         await this.report(job.id, { status: 'needs_input', question, summary });
-        log(`? ${job.code}: Janet soru sordu — ${question.split('\n')[0].slice(0, 120)}`);
+        log(`? ${job.code}: Janet soru sordu: ${question.split('\n')[0].slice(0, 120)}`);
       } else {
         await this.report(job.id, { status: 'no_change', summary });
         log(`○ ${job.code}: kod değişikliği yok (${mins} dk).`);

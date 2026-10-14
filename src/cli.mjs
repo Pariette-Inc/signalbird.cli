@@ -16,7 +16,7 @@ import { FIX_PROTOCOL, VERSION } from './version.mjs';
 
 const HELP = `signalbird ${VERSION}
 
-Janet (geliştirici bilgisayarı) — Signalbird alarmını yerel Claude'a düzelttirip PR açar
+Janet (geliştirici bilgisayarı): Signalbird alarmını yerel Claude'a düzelttirip PR açar
   signalbird login [--root ~/git] [--no-service] [--api URL]
                                          Hesabınızla bağlanır (tarayıcı onayı), proje kökünü bulur,
                                          servisi kurar. Bir kez çalıştırmanız yeter.
@@ -80,7 +80,7 @@ async function login(argv) {
   const total = values['no-service'] ? 3 : 4;
   ui.title('Signalbird · Janet kurulumu');
 
-  // 1) Proje klasörü — tarayıcı onayından ÖNCE sorulur: soru yarıda
+  // 1) Proje klasörü: tarayıcı onayından ÖNCE sorulur: soru yarıda
   // kesilirse bilgisayar bağlanmış ama projesiz kalıyordu (14 Eki).
   ui.step(1, total, 'Proje klasörü');
   let roots = (values.root || []).map(expandHome);
@@ -389,7 +389,7 @@ async function fixDoctor() {
     ok = check('API', false, err.message) && ok;
   }
 
-  // auth_required / rate_limited bayrağını sıfırla — yalnız Claude gerçekten çalışıyorsa.
+  // auth_required / rate_limited bayrağını sıfırla: yalnız Claude gerçekten çalışıyorsa.
   if (probe.ok) try {
     const statePath = `${cfg.fix.workdir}/state.json`;
     if (existsSync(statePath)) {
