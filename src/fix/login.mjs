@@ -11,6 +11,8 @@ import { ApiError, createClient } from '../api.mjs';
 import { VERSION } from '../version.mjs';
 
 export function openBrowser(url) {
+  // SSH ile bağlanılan makinede tarayıcı yok: adres ve kod ekrana yazılır.
+  if (process.env.SIGNALBIRD_NO_BROWSER === '1' || process.env.SSH_CONNECTION) return false;
   const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
   const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
   try {
