@@ -53,7 +53,8 @@ export function claudeVersion(cfg) {
   const bin = claudeBin(cfg);
   if (!bin) return null;
   const out = tryRun(bin, ['--version'], { timeout: 20000 });
-  return out ? out.split('\n')[0].trim() : null;
+  // Sunucu en fazla 40 karakter kabul eder; uzun / beklenmedik çıktı hello'yu düşürmesin.
+  return out ? out.split('\n')[0].trim().slice(0, 40) || null : null;
 }
 
 const AUTH_RE = [/failed to authenticate/i, /oauth token (has )?expired/i, /not logged in/i, /please run \/login/i, /invalid api key/i, /authentication_error/i];
