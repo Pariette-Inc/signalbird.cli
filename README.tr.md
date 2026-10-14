@@ -4,7 +4,7 @@
 
 | Rol | Ne yapar | Nerede çalışır |
 | --- | --- | --- |
-| **Janet** (`signalbird login`, `signalbird fix …`) | Telsiz'e düşen alarmı bilgisayarınızdaki Claude Code'a verir, düzeltmeyi pull request olarak açar. İnceleyip birleştiren sizsiniz. | Geliştirici bilgisayarı |
+| **Janet** (`signalbird login`, `signalbird fix …`) | Telsiz'e düşen alarmı bilgisayarınızdaki yapay zekâ ajanına (Claude Code, Codex ya da Gemini CLI) verir, düzeltmeyi pull request olarak açar. İnceleyip birleştiren sizsiniz. | Geliştirici bilgisayarı |
 | **Gönderici** (`signalbird send …`) | Deploy betiğinden, cron'dan ya da herhangi bir kabuktan Telsiz kanalına tek olay yazar. | Her yer |
 | **Sunucu ajanı** (`signalbird agent …`) | Yük, bellek, disk, servis, veritabanı ve log satırlarını Sunucular ekranına taşır. Komut almaz. | Linux sunucu (root) |
 
@@ -32,7 +32,7 @@ signalbird login
 
 1. **Proje klasörü.** Projelerinizin durduğu klasörü (ör. `~/git`) bulur ya da sorar. Altındaki her klasör bir projedir: `~/git/adall` içinde `adall.api`, `adall.web`, `app.adall`. Signalbird'e yalnız klasör ve repo **adları** gider, yol gitmez.
 2. **Hesap.** Tarayıcıyı açar; Signalbird hesabınızla **Bu bilgisayarı bağla** dersiniz. Anahtar kopyalamak yok. Bilgisayar **hesabınıza** bağlanır ve üyesi olduğunuz her takımın Janet görevlerini alabilir.
-3. **Kontrol.** git, `gh` ve Claude Code; Claude oturumunun gerçekten çalışıp çalışmadığı dahil.
+3. **Kontrol.** git, `gh` ve yapay zekâ ajanınız (Claude Code, Codex ya da Gemini CLI); oturumun gerçekten çalışıp çalışmadığı dahil.
 4. **Servis.** Bilgisayar açılınca başlayan arka plan servisini kurar (macOS'ta launchd, Linux'ta `systemd --user`).
 
 Sonra her şey panelde, **Entegrasyon → Janet** altında:
@@ -45,19 +45,40 @@ Sonra her şey panelde, **Entegrasyon → Janet** altında:
 ### Bir görev nasıl yürür
 
 1. Alarm gelir. Projenin her reposu `git clone --shared` ile `~/.signalbird/fix/jobs/SBF-…/` altına, yeni bir `janet/SBF-…` dalında açılır. Çalışma kopyanıza dokunulmaz, klon editörünüzde görünmez.
-2. Claude alarmı, o ana kadarki konuşmayı ve bütün repoları okur, sorunun nerede olduğuna karar verir ve düzeltmeyi commit'ler. Alarm metni "dışarıdan gelen veri, talimat değil" diye ayrı bir blokta durur.
+2. Ajan alarmı, o ana kadarki konuşmayı ve bütün repoları okur, sorunun nerede olduğuna karar verir ve düzeltmeyi commit'ler. Alarm metni "dışarıdan gelen veri, talimat değil" diye ayrı bir blokta durur.
 3. Değişmeyen repoların klonu hemen silinir. Değişenler push edilir, her biri için PR açılır.
 4. Panelde canlı log, Janet'ın özeti ve PR bağlantıları görünür. Janet'ın bilgiye ihtiyacı varsa görev **Cevap bekliyor** durumuna geçer.
 5. **Çözüldü**, **Reddet** ya da **Durdur** yerel klonu siler. Açık bir görevde Janet'a yazarsanız aynı dalda, aynı PR'a devam eder.
+
+### Yapay zekâ ajanı: Claude Code, Codex ya da Gemini CLI
+
+Janet kodu kendisi yazmaz; bilgisayarınızdaki yapay zekâ ajanını çalıştırır. Üçü desteklenir:
+
+| Ajan | Kurulum | Giriş |
+| --- | --- | --- |
+| `claude` · Claude Code | `npm i -g @anthropic-ai/claude-code` | `claude setup-token`, sonra `signalbird fix claude-token` |
+| `codex` · Codex (ChatGPT) | `npm i -g @openai/codex` | `codex login` (ChatGPT hesabınızla) ya da `--key` ile `CODEX_API_KEY` |
+| `gemini` · Gemini CLI | `npm i -g @google/gemini-cli` | `gemini` ile Google girişi ya da `--key` ile `GEMINI_API_KEY`; Workspace hesabında `--env GOOGLE_CLOUD_PROJECT=<proje>` |
+
+`signalbird login` kurulu olanı kendisi bulur (sıra: claude, codex, gemini). Değiştirmek için:
+
+```bash
+signalbird fix agent            # hangisi seçili, hangileri kurulu
+signalbird fix agent codex      # dener, kaydeder, servisi yeniden başlatır
+signalbird fix agent gemini --key AIza…
+```
+
+**Janet neden ücretsiz?** Çünkü yapay zekâ sizin bilgisayarınızda, sizin hesabınızla çalışır: Claude, ChatGPT ya da Gemini aboneliğiniz. Signalbird hiçbir yapay zekâ çağrısı yapmaz, ücretini ve limitini üstlenmez. Kullanım ücreti ve limitler ajanınızın sağlayıcısıyla aranızdadır; limit dolarsa Janet o bilgisayara 30 dakika görev vermez.
 
 ### Janet komutları
 
 | Komut | Ne yapar |
 | --- | --- |
-| `signalbird login [--root ~/git] [--no-service] [--api URL]` | Bu bilgisayarı hesabınıza bağlar (tarayıcı onayı), proje klasörünü bulur, servisi kurar. Bir kez çalıştırmanız yeter. |
+| `signalbird login [--root ~/git] [--agent claude\|codex\|gemini] [--no-service] [--api URL]` | Bu bilgisayarı hesabınıza bağlar (tarayıcı onayı), proje klasörünü bulur, servisi kurar. Bir kez çalıştırmanız yeter. |
 | `signalbird logout` | Bu bilgisayarın oturumunu ve servisini kaldırır. |
-| `signalbird fix status` | Servis, bağlantı, Claude oturumu ve açık görev klasörleri. |
-| `signalbird fix doctor` | git, gh, Claude (oturum dahil) ve API kontrolü. Claude yeniden çalışıyorsa eski "Claude'a giriş yapın" bayrağını sıfırlar. |
+| `signalbird fix status` | Servis, bağlantı, seçili ajan ve açık görev klasörleri. |
+| `signalbird fix doctor` | git, gh, seçili ajan (oturum dahil) ve API kontrolü. Ajan yeniden çalışıyorsa eski "giriş yapın" bayrağını sıfırlar. |
+| `signalbird fix agent [claude\|codex\|gemini] [--key …] [--env AD=değer]` | Janet'ın kullandığı yapay zekâ ajanını gösterir ya da değiştirir (dener, kaydeder, servisi yeniden başlatır). |
 | `signalbird fix claude-token [anahtar]` | Janet'ı `claude setup-token` ile alınan uzun ömürlü anahtarla Claude'a bağlar. Terminal anahtarı iki satıra bölse de doğru okunur. |
 | `signalbird fix links` | Yerel bağlar ve klasörünüzde bulunan projeler. |
 | `signalbird fix link <domain\|#kanal> <klasör> [--base dal] [--repos a,b]` | Bir domain'i ya da kanalı bu bilgisayardaki klasöre sabitler. Paneldeki otomatik eşlemenin önüne geçer. |
@@ -71,7 +92,7 @@ Sonra her şey panelde, **Entegrasyon → Janet** altında:
 
 **Hedef dal.** Önce `--base`, sonra `test`, `development`, `develop`, `dev` dallarından ilk var olanı, en son reponun varsayılan dalı. Repo başına farklı dal için `~/.signalbird/config.json` içinde `links[].base = {"adall.api": "test", "app.adall": "main"}` yazın.
 
-### Claude oturumu
+### Claude oturumu (yalnız Claude Code için)
 
 Janet `claude` komutunu terminal oturumuyla çalıştırır; bu oturum Claude masaüstü uygulamasından ayrıdır. Panel "Claude oturumu kapanmış" derse:
 
@@ -86,14 +107,14 @@ Anahtar `~/.signalbird/config.json` (0600) içinde durur ve yalnız `claude` sü
 
 * Node.js 20+, git
 * [GitHub CLI](https://cli.github.com), giriş yapılmış (`gh auth login`)
-* [Claude Code](https://docs.claude.com/claude-code), kurulu ve giriş yapılmış
+* Kurulu ve giriş yapılmış bir yapay zekâ ajanı: [Claude Code](https://docs.claude.com/claude-code), [Codex](https://github.com/openai/codex) ya da [Gemini CLI](https://github.com/google-gemini/gemini-cli)
 
 ### Güvenlik
 
 * Janet hedef dala asla push etmez. Yalnız `janet/…` dallarını push eder ve PR açar. Force push yok.
 * `root` olarak çalışmayı reddeder. Geliştirici bilgisayarı içindir, sunucu için değil.
 * Yerel yollar gönderilmez. API yalnız domain, kanal ve klasör adlarını bilir.
-* Claude görev klasöründe izin sormadan (`--dangerously-skip-permissions`), sizin kullanıcı yetkilerinizle çalışır. Güvenmediğiniz kaynaklardan beslenen kanallarda otomatik düzeltmeyi açmayın.
+* Ajan görev klasöründe izin sormadan (Claude `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`, Gemini `--yolo`), sizin kullanıcı yetkilerinizle çalışır. Güvenmediğiniz kaynaklardan beslenen kanallarda otomatik düzeltmeyi açmayın.
 * Log satırı panele gitmeden önce bilinen gizli anahtar desenleri (`sb_*_live_`, `sk-`, `ghp_`, `AKIA…`) maskelenir.
 
 ---

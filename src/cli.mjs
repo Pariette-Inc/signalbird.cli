@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { agentMain, AGENT_HELP } from './agent/index.mjs';
 import { ApiError } from './api.mjs';
 import { expandHome, loadConfig, parseTarget, saveConfig, sameTarget, targetLabel } from './config.mjs';
-import { claudeVersion, probeClaude } from './fix/agent.mjs';
+import { AGENT_NAMES, AGENTS, agentName, agentVersion, probeAgent } from './fix/agent.mjs';
 import { describeLink, discoverProjects, suggestRoots } from './fix/discover.mjs';
 import { deviceLogin } from './fix/login.mjs';
 import { tryRun } from './fix/git.mjs';
@@ -16,8 +16,8 @@ import { FIX_PROTOCOL, VERSION } from './version.mjs';
 
 const HELP = `signalbird ${VERSION}
 
-Janet (geliştirici bilgisayarı): Signalbird alarmını yerel Claude'a düzelttirip PR açar
-  signalbird login [--root ~/git] [--no-service] [--api URL]
+Janet (geliştirici bilgisayarı): Signalbird alarmını kendi ajanınıza (Claude Code, Codex, Gemini CLI) düzelttirip PR açar
+  signalbird login [--root ~/git] [--agent claude|codex|gemini] [--no-service] [--api URL]
                                          Hesabınızla bağlanır (tarayıcı onayı), proje kökünü bulur,
                                          servisi kurar. Bir kez çalıştırmanız yeter.
   signalbird logout                      Bu bilgisayarın oturumunu ve servisini kaldırır
@@ -30,7 +30,9 @@ Janet (geliştirici bilgisayarı): Signalbird alarmını yerel Claude'a düzeltt
   signalbird fix uninstall
   signalbird fix start                   Ön planda çalıştırır
   signalbird fix status                  Servis, bağlantı, açık iş klasörleri
-  signalbird fix doctor                  git / gh / claude (oturum dahil) / API kontrolü
+  signalbird fix doctor                  git / gh / ajan (oturum dahil) / API kontrolü
+  signalbird fix agent [claude|codex|gemini] [--key …] [--env AD=değer]
+                                         Janet'ın kullandığı ajanı gösterir ya da değiştirir
   signalbird fix claude-token [anahtar]  Claude'a uzun ömürlü anahtarla bağlanır (claude setup-token)
   signalbird fix cleanup [--dry-run] [--force]
                                          Sunucuda kapanmış işlerin yerel klonlarını siler
@@ -69,6 +71,7 @@ async function login(argv) {
     root: { type: 'string', multiple: true },
     'no-service': { type: 'boolean' },
     key: { type: 'string' },
+    agent: { type: 'string' },
   });
   if (values.key) return fixLogin(['--key', values.key, ...(values.api ? ['--api', values.api] : [])]);
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
@@ -126,22 +129,14 @@ async function login(argv) {
       protocol: FIX_PROTOCOL,
       links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
       projects: projects.map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
-      agents: { claude: { version: claudeVersion(cfg), status: 'ready' } },
+      agents: { [agentName(cfg)]: { version: agentVersion(cfg), status: 'ready' } },
     });
   } catch {}
   ui.gap();
 
   // 3) Gerekenler
   ui.step(3, total, 'Kontroller');
-  const cv = claudeVersion(cfg);
-  if (!cv) ui.fail('Claude Code bulunamadı', 'npm i -g @anthropic-ai/claude-code && claude');
-  else {
-    const sp = ui.spinner('Claude deneniyor…');
-    const probe = probeClaude(cfg);
-    sp.stop();
-    if (probe.ok) ui.ok(`Claude Code ${c.dim(cv.replace(/\s*\(Claude Code\)/, ''))} · oturum açık`);
-    else ui.fail(`Claude Code ${cv.replace(/\s*\(Claude Code\)/, '')} · ${probe.failure === 'auth_required' ? 'oturum yok' : 'çalışmadı'}`, CLAUDE_FIX[probe.failure] || probe.detail);
-  }
+  checkAgent(cfg, values.agent);
   if (tryRun('gh', ['auth', 'status']) !== null) ui.ok('GitHub CLI oturumu açık');
   else ui.fail('GitHub CLI oturumu yok (PR açmak için gerekli)', 'brew install gh && gh auth login');
   ui.gap();
@@ -171,11 +166,92 @@ async function login(argv) {
   ]);
 }
 
-const CLAUDE_FIX = {
-  auth_required: 'claude setup-token  →  çıkan anahtarla: signalbird fix claude-token',
-  rate_limited: 'Claude kullanım limiti dolmuş; sıfırlanınca tekrar: signalbird fix doctor',
-  not_installed: 'npm i -g @anthropic-ai/claude-code',
-};
+/** Ajan hatasında ne yapılacağı. */
+function agentFix(name, failure) {
+  const a = AGENTS[name];
+  if (failure === 'auth_required') return a.login;
+  if (failure === 'not_installed') return a.install;
+  if (failure === 'rate_limited') return `${a.label} kullanım limiti dolmuş; sıfırlanınca tekrar: signalbird fix doctor`;
+  return null;
+}
+
+/**
+ * `login`in 3. adımı: ajanı seçer ve dener. `--agent` verilmediyse ayardaki
+ * ajan kuruluysa o kalır; değilse kurulu ilk ajan (claude, codex, gemini
+ * sırasıyla) seçilir ve kaydedilir.
+ */
+function checkAgent(cfg, wanted) {
+  if (wanted && !AGENTS[wanted]) die(`Bilinmeyen ajan: ${wanted}. Seçenekler: ${AGENT_NAMES.join(', ')}`);
+  let name = wanted || agentName(cfg);
+  if (!wanted && !agentVersion(cfg, name)) {
+    const found = AGENT_NAMES.find((n) => agentVersion(cfg, n));
+    if (found) name = found;
+  }
+  if (cfg.fix.agent !== name) {
+    cfg.fix.agent = name;
+    saveConfig(cfg);
+  }
+  const a = AGENTS[name];
+  const v = agentVersion(cfg, name);
+  if (!v) {
+    ui.fail(`${a.label} bulunamadı`, `${a.install}   (ya da: signalbird login --agent codex | gemini)`);
+    return;
+  }
+  const sp = ui.spinner(`${a.label} deneniyor…`);
+  const probe = probeAgent(cfg, name);
+  sp.stop();
+  const ver = c.dim(v.replace(/\s*\(Claude Code\)/, ''));
+  if (probe.ok) ui.ok(`${a.label} ${ver} · oturum açık`);
+  else ui.fail(`${a.label} ${ver} · ${probe.failure === 'auth_required' ? 'oturum yok' : 'çalışmadı'}`, agentFix(name, probe.failure) || probe.detail);
+  const others = AGENT_NAMES.filter((n) => n !== name && agentVersion(cfg, n));
+  if (others.length) ui.line(c.dim(`Başka ajan da kurulu (${others.map((n) => AGENTS[n].label).join(', ')}). Değiştirmek için: signalbird fix agent <ad>`));
+}
+
+/**
+ * `signalbird fix agent [ad] [--key …]`: Janet'ın hangi ajanla çalışacağı.
+ * Ajan kullanıcının kendi bilgisayarında, kendi hesabıyla çalışır.
+ */
+async function fixAgent(argv) {
+  const { values, positionals } = args(argv, { key: { type: 'string' }, env: { type: 'string', multiple: true } });
+  const cfg = loadConfig();
+  const current = agentName(cfg);
+  const wanted = positionals[0];
+
+  if (!wanted) {
+    out(`Janet şu an ${c.bold(AGENTS[current].label)} ile çalışıyor.\n`);
+    for (const n of AGENT_NAMES) {
+      const v = agentVersion(cfg, n);
+      out(`  ${n === current ? c.green('●') : ' '} ${n.padEnd(7)} ${AGENTS[n].label.padEnd(16)} ${v ? c.dim(v) : c.dim(`kurulu değil → ${AGENTS[n].install}`)}`);
+    }
+    return out(`\nDeğiştirmek için: signalbird fix agent codex   (ya da claude, gemini)`);
+  }
+
+  if (!AGENTS[wanted]) die(`Bilinmeyen ajan: ${wanted}. Seçenekler: ${AGENT_NAMES.join(', ')}`);
+  const a = AGENTS[wanted];
+  if (!agentVersion(cfg, wanted)) die(`${a.label} bu bilgisayarda yok. Kurmak için: ${a.install}`);
+
+  if (values.key) {
+    const envKey = { claude: 'CLAUDE_CODE_OAUTH_TOKEN', codex: 'CODEX_API_KEY', gemini: 'GEMINI_API_KEY' }[wanted];
+    cfg.fix[wanted] = { ...(cfg.fix[wanted] || {}), env: { ...(cfg.fix[wanted]?.env || {}), [envKey]: values.key.trim() } };
+  }
+
+  // Ör. Workspace hesabıyla Gemini: --env GOOGLE_CLOUD_PROJECT=proje-id
+  for (const kv of values.env || []) {
+    const i = kv.indexOf('=');
+    if (i < 1) die(`--env AD=değer biçiminde olmalı: ${kv}`);
+    cfg.fix[wanted] = { ...(cfg.fix[wanted] || {}), env: { ...(cfg.fix[wanted]?.env || {}), [kv.slice(0, i)]: kv.slice(i + 1) } };
+  }
+
+  cfg.fix.agent = wanted;
+  const sp = ui.spinner(`${a.label} deneniyor…`);
+  const probe = probeAgent(cfg, wanted);
+  sp.stop();
+  if (!probe.ok) die(`${a.label} çalışmadı (${probe.failure === 'auth_required' ? 'oturum yok' : probe.detail || probe.failure}). ${agentFix(wanted, probe.failure) || ''}`);
+  saveConfig(cfg);
+  resetAgentState(cfg);
+  ui.ok(`Janet artık ${a.label} ile çalışıyor.`);
+  if (restart()) ui.ok('Servis yeniden başlatıldı.');
+}
 
 /**
  * Janet'ın Claude'a uzun ömürlü anahtarla bağlanması. Terminal oturumu
@@ -200,7 +276,7 @@ async function fixClaudeToken(argv) {
   if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(token)) die('Bu bir Claude anahtarına benzemiyor (sk-ant-… bekleniyor). Almak için: claude setup-token');
   cfg.fix.claude.env.CLAUDE_CODE_OAUTH_TOKEN = token;
   const sp = ui.spinner('Claude deneniyor…');
-  const probe = probeClaude(cfg);
+  const probe = probeAgent(cfg, 'claude');
   sp.stop();
   if (!probe.ok) die(`Anahtarla da çalışmadı: ${probe.detail}`);
   saveConfig(cfg);
@@ -323,6 +399,7 @@ async function fixStatus() {
   const svc = serviceStatus();
   out(`signalbird ${VERSION} · API ${cfg.api}`);
   out(`Anahtar: ${cfg.fix.key ? cfg.fix.key.slice(0, 16) + '…' : 'yok'}`);
+  out(`Ajan: ${AGENTS[agentName(cfg)].label} ${agentVersion(cfg) || '(kurulu değil)'}  · değiştirmek için: signalbird fix agent`);
   out(`Servis: ${svc.installed ? (svc.running ? `çalışıyor (pid ${svc.pid ?? '?'})` : 'kurulu, çalışmıyor') : 'kurulu değil → Janet görev almaz. Kurmak için: signalbird fix install'}`);
   const projects = discoverProjects(cfg.fix.roots);
   out(`Proje kökü: ${cfg.fix.roots.join(', ') || 'yok (signalbird login --root …)'} · ${projects.length} proje`);
@@ -335,7 +412,7 @@ async function fixStatus() {
         protocol: FIX_PROTOCOL,
         links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
         projects: cfg.fix.roots.length ? projects.map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
-        agents: { claude: { version: claudeVersion(cfg), status: 'ready' } },
+        agents: { [agentName(cfg)]: { version: agentVersion(cfg), status: 'ready' } },
       });
       out(`Sunucu: makine "${res.machine?.name}", kuyrukta ${res.pending ?? 0} iş, temizlik bekleyen ${res.cleanup?.length ?? 0}`);
     } catch (err) {
@@ -368,10 +445,11 @@ async function fixDoctor() {
     const auth = tryRun('gh', ['auth', 'status']);
     ok &= check('gh oturumu', auth !== null, auth !== null ? 'açık' : 'kapalı → gh auth login');
   }
-  const cv = claudeVersion(cfg);
-  ok &= check('claude', Boolean(cv), cv || 'yok → npm i -g @anthropic-ai/claude-code');
-  const probe = cv ? probeClaude(cfg) : { ok: false, failure: 'not_installed' };
-  if (cv) ok &= check('claude oturumu', probe.ok, probe.ok ? 'çalışıyor' : CLAUDE_FIX[probe.failure] || probe.detail);
+  const an = agentName(cfg);
+  const cv = agentVersion(cfg, an);
+  ok &= check(an, Boolean(cv), cv || `yok → ${AGENTS[an].install}`);
+  const probe = cv ? probeAgent(cfg, an) : { ok: false, failure: 'not_installed' };
+  if (cv) ok &= check(`${an} oturumu`, probe.ok, probe.ok ? 'çalışıyor' : agentFix(an, probe.failure) || probe.detail);
   ok &= check('root değil', !(process.getuid && process.getuid() === 0), '');
 
   try {
@@ -382,14 +460,14 @@ async function fixDoctor() {
       protocol: FIX_PROTOCOL,
       links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
       projects: cfg.fix.roots.length ? discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
-      agents: { claude: { version: cv, status: 'ready' } },
+      agents: { [agentName(cfg)]: { version: cv, status: 'ready' } },
     });
     check('API', true, `makine "${res.machine?.name}"`);
   } catch (err) {
     ok = check('API', false, err.message) && ok;
   }
 
-  // auth_required / rate_limited bayrağını sıfırla: yalnız Claude gerçekten çalışıyorsa.
+  // auth_required / rate_limited bayrağını sıfırla: yalnız ajan gerçekten çalışıyorsa.
   if (probe.ok) try {
     const statePath = `${cfg.fix.workdir}/state.json`;
     if (existsSync(statePath)) {
@@ -398,7 +476,7 @@ async function fixDoctor() {
         st.agent = { status: 'ready', until: null };
         const { writeFileSync } = await import('node:fs');
         writeFileSync(statePath, JSON.stringify(st, null, 2));
-        out(`• Claude durumu "ready" olarak sıfırlandı.`);
+        out(`• ${AGENTS[an].label} durumu "ready" olarak sıfırlandı.`);
       }
     }
   } catch {}
@@ -480,6 +558,8 @@ async function fix(argv) {
       return fixStatus();
     case 'claude-token':
       return fixClaudeToken(rest);
+    case 'agent':
+      return fixAgent(rest);
     case 'doctor':
       return fixDoctor();
     case 'cleanup':
