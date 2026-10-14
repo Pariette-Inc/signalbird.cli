@@ -88,7 +88,18 @@ async function login(argv) {
   const cfg = loadConfig();
   if (values.api) cfg.api = values.api.replace(/\/+$/, '');
 
-  // 1) Hesapla bağlan
+  // 1) Proje kökü — tarayıcı onayından ÖNCE sorulur: soru yarıda
+  // kesilirse bilgisayar bağlanmış ama projesiz kalıyordu (14 Eki).
+  let roots = (values.root || []).map(expandHome);
+  if (!roots.length && cfg.fix.roots.length) roots = cfg.fix.roots;
+  if (!roots.length) {
+    const s = suggestRoots();
+    const def = s[0]?.root || expandHome('~/git');
+    roots = [expandHome(await ask('Projeleriniz hangi klasörde?', def))];
+  }
+  for (const r of roots) if (!existsSync(r)) die(`Klasör yok: ${r}`);
+  cfg.fix.roots = roots;
+  // 2) Hesapla bağlan
   const { token, machine } = await deviceLogin({
     api: cfg.api,
     onCode: ({ verify_url, user_code, opened }) => {
@@ -102,18 +113,17 @@ async function login(argv) {
   saveConfig(cfg);
   out(`✓ Bağlandı: "${machine.name || 'bu bilgisayar'}" hesabınıza eklendi.`);
 
-  // 2) Proje kökü
-  let roots = (values.root || []).map(expandHome);
-  if (!roots.length && cfg.fix.roots.length) roots = cfg.fix.roots;
-  if (!roots.length) {
-    const s = suggestRoots();
-    const def = s[0]?.root || expandHome('~/git');
-    roots = [expandHome(await ask('Projeleriniz hangi klasörde?', def))];
-  }
-  for (const r of roots) if (!existsSync(r)) die(`Klasör yok: ${r}`);
-  cfg.fix.roots = roots;
-  saveConfig(cfg);
   const projects = discoverProjects(roots);
+  // Panel projeleri hemen görsün (servisin ilk turunu beklemeden).
+  try {
+    await fixClient(cfg, { retry: false })('POST', '/v1/fix/hello', {
+      version: VERSION,
+      protocol: FIX_PROTOCOL,
+      links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
+      projects: projects.map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
+      agents: { claude: { version: claudeVersion(cfg), status: 'ready' } },
+    });
+  } catch {}
   out(`✓ ${projects.length} proje bulundu (${roots.join(', ')})${projects.length ? ': ' + projects.slice(0, 8).map((p) => p.name).join(', ') + (projects.length > 8 ? ', …' : '') : ''}`);
   if (!projects.length) out('  Uyarı: bu klasörde git deposu olan proje yok. Değiştirmek için: signalbird login --root <klasör>');
 
@@ -167,7 +177,7 @@ async function fixLogin(argv) {
       version: VERSION,
       protocol: FIX_PROTOCOL,
       links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
-      projects: discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
+      projects: cfg.fix.roots.length ? discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
       agents: {},
     });
     saveConfig(cfg);
@@ -247,7 +257,7 @@ async function fixStatus() {
   const svc = serviceStatus();
   out(`signalbird ${VERSION} · API ${cfg.api}`);
   out(`Anahtar: ${cfg.fix.key ? cfg.fix.key.slice(0, 16) + '…' : 'yok'}`);
-  out(`Servis: ${svc.installed ? (svc.running ? `çalışıyor (pid ${svc.pid ?? '?'})` : 'kurulu, çalışmıyor') : 'kurulu değil'}`);
+  out(`Servis: ${svc.installed ? (svc.running ? `çalışıyor (pid ${svc.pid ?? '?'})` : 'kurulu, çalışmıyor') : 'kurulu değil → Janet görev almaz. Kurmak için: signalbird fix install'}`);
   const projects = discoverProjects(cfg.fix.roots);
   out(`Proje kökü: ${cfg.fix.roots.join(', ') || 'yok (signalbird login --root …)'} · ${projects.length} proje`);
   out(`Yerel bağlar: ${cfg.fix.links.map(targetLabel).join(', ') || 'yok'}`);
@@ -258,7 +268,7 @@ async function fixStatus() {
         version: VERSION,
         protocol: FIX_PROTOCOL,
         links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
-        projects: projects.map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
+        projects: cfg.fix.roots.length ? projects.map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
         agents: { claude: { version: claudeVersion(cfg), status: 'ready' } },
       });
       out(`Sunucu: makine "${res.machine?.name}", kuyrukta ${res.pending ?? 0} iş, temizlik bekleyen ${res.cleanup?.length ?? 0}`);
@@ -303,7 +313,7 @@ async function fixDoctor() {
       version: VERSION,
       protocol: FIX_PROTOCOL,
       links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
-      projects: discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
+      projects: cfg.fix.roots.length ? discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
       agents: { claude: { version: cv, status: 'ready' } },
     });
     check('API', true, `makine "${res.machine?.name}"`);
