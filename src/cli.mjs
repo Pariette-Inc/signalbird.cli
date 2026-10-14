@@ -4,22 +4,27 @@ import { agentMain, AGENT_HELP } from './agent/index.mjs';
 import { ApiError } from './api.mjs';
 import { expandHome, loadConfig, parseTarget, saveConfig, sameTarget, targetLabel } from './config.mjs';
 import { claudeVersion } from './fix/agent.mjs';
-import { describeLink } from './fix/discover.mjs';
+import { describeLink, discoverProjects, suggestRoots } from './fix/discover.mjs';
+import { deviceLogin } from './fix/login.mjs';
 import { tryRun } from './fix/git.mjs';
 import { assertFixAllowed, fixClient, FixRunner } from './fix/runner.mjs';
 import { install, logFile, restart, serviceStatus, uninstall } from './fix/service.mjs';
 import { listJobs, removeJob } from './fix/workspace.mjs';
 import { send } from './send.mjs';
-import { VERSION } from './version.mjs';
+import { FIX_PROTOCOL, VERSION } from './version.mjs';
 
 const HELP = `signalbird ${VERSION}
 
-Düzeltici (geliştirici bilgisayarı) — telsiz alarmını yerel Claude'a düzelttirip PR açar
-  signalbird fix login --key sbf_live_…   [--api URL]   Panelden alınan makine anahtarını kaydeder
+Janet (geliştirici bilgisayarı) — Signalbird alarmını yerel Claude'a düzelttirip PR açar
+  signalbird login [--root ~/git] [--no-service] [--api URL]
+                                         Hesabınızla bağlanır (tarayıcı onayı), proje kökünü bulur,
+                                         servisi kurar. Bir kez çalıştırmanız yeter.
+  signalbird logout                      Bu bilgisayarın oturumunu ve servisini kaldırır
+  signalbird fix login --key sbf_live_…   [--api URL]   (gelişmiş) Anahtarla bağlanır
   signalbird fix link <domain|#kanal> <klasör> [--base dal] [--repos a,b]
                                          Domain'i proje klasörüne bağlar (alt repolar otomatik bulunur)
   signalbird fix unlink <domain|#kanal>
-  signalbird fix links                   Bağlar ve keşfedilen repolar / hedef dallar
+  signalbird fix links                   Yerel bağlar ve projeler (eşleme panelde de yapılır)
   signalbird fix install                 Açılışta başlayan servis olarak kurar (launchd / systemd)
   signalbird fix uninstall
   signalbird fix start                   Ön planda çalıştırır
@@ -53,27 +58,126 @@ function args(argv, options) {
   return parseArgs({ args: argv, options, allowPositionals: true, strict: true });
 }
 
+
+// ── login (protokol 2, PROTOCOL.md §12.2) ───────────────────────────
+
+async function ask(question, def) {
+  if (!process.stdin.isTTY) return def;
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const a = (await rl.question(`${question}${def ? ` [${def}]` : ''}: `)).trim();
+    return a || def;
+  } finally {
+    rl.close();
+  }
+}
+
+async function login(argv) {
+  const { values } = args(argv, {
+    api: { type: 'string' },
+    root: { type: 'string', multiple: true },
+    'no-service': { type: 'boolean' },
+    key: { type: 'string' },
+  });
+  if (values.key) return fixLogin(['--key', values.key, ...(values.api ? ['--api', values.api] : [])]);
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    die('signalbird login root olarak çalışmaz. Janet geliştirici bilgisayarı içindir; sunucular için: sudo signalbird agent install --token=…');
+  }
+
+  const cfg = loadConfig();
+  if (values.api) cfg.api = values.api.replace(/\/+$/, '');
+
+  // 1) Hesapla bağlan
+  const { token, machine } = await deviceLogin({
+    api: cfg.api,
+    onCode: ({ verify_url, user_code, opened }) => {
+      out(opened ? 'Tarayıcıda Signalbird açıldı. "Bu bilgisayarı bağla" deyin.' : 'Bu adresi tarayıcıda açın ve "Bu bilgisayarı bağla" deyin:');
+      out(`  ${verify_url}`);
+      out(`  Kod: ${user_code}`);
+      out('Onay bekleniyor…');
+    },
+  });
+  cfg.fix.key = token;
+  saveConfig(cfg);
+  out(`✓ Bağlandı: "${machine.name || 'bu bilgisayar'}" hesabınıza eklendi.`);
+
+  // 2) Proje kökü
+  let roots = (values.root || []).map(expandHome);
+  if (!roots.length && cfg.fix.roots.length) roots = cfg.fix.roots;
+  if (!roots.length) {
+    const s = suggestRoots();
+    const def = s[0]?.root || expandHome('~/git');
+    roots = [expandHome(await ask('Projeleriniz hangi klasörde?', def))];
+  }
+  for (const r of roots) if (!existsSync(r)) die(`Klasör yok: ${r}`);
+  cfg.fix.roots = roots;
+  saveConfig(cfg);
+  const projects = discoverProjects(roots);
+  out(`✓ ${projects.length} proje bulundu (${roots.join(', ')})${projects.length ? ': ' + projects.slice(0, 8).map((p) => p.name).join(', ') + (projects.length > 8 ? ', …' : '') : ''}`);
+  if (!projects.length) out('  Uyarı: bu klasörde git deposu olan proje yok. Değiştirmek için: signalbird login --root <klasör>');
+
+  // 3) Gerekenler
+  const cv = claudeVersion(cfg);
+  if (!cv) out('✗ Claude Code bulunamadı → npm i -g @anthropic-ai/claude-code, sonra bir kez "claude" çalıştırıp giriş yapın.');
+  else out(`✓ Claude Code ${cv}`);
+  const ghOk = tryRun('gh', ['auth', 'status']) !== null;
+  out(ghOk ? '✓ GitHub CLI oturumu açık' : '✗ GitHub CLI oturumu yok → brew install gh && gh auth login (PR açmak için gerekli)');
+
+  // 4) Servis
+  if (!values['no-service']) {
+    try {
+      if (serviceStatus().installed) {
+        restart();
+        out('✓ Servis yeniden başlatıldı.');
+      } else {
+        const r = install();
+        out(`✓ Servis kuruldu (${r.kind}); bilgisayar açıldığında kendiliğinden başlar. Log: signalbird fix logs`);
+      }
+    } catch (err) {
+      out(`✗ Servis kurulamadı: ${err.message}. Ön planda çalıştırmak için: signalbird fix start`);
+    }
+  }
+
+  out('\nHazır. Gerisi panelden: Janet → Projeler bölümünde domain\'lerinizi projelere eşleyin (çoğu kendiliğinden eşleşir),');
+  out('kanal ayarında "Janet otomatik düzeltsin"i açın ya da bir alarmda "Janet\'a aktar"a basın.');
+}
+
+async function logout() {
+  const cfg = loadConfig();
+  uninstall();
+  cfg.fix.key = null;
+  saveConfig(cfg);
+  out('✓ Oturum ve servis kaldırıldı. Bilgisayarı panelden de silmek için: Janet → Bilgisayarlar.');
+}
+
 // ── fix ─────────────────────────────────────────────────────────────
 
 async function fixLogin(argv) {
   const { values } = args(argv, { key: { type: 'string' }, api: { type: 'string' } });
   const cfg = loadConfig();
   if (values.api) cfg.api = values.api.replace(/\/+$/, '');
-  if (!values.key) die('--key sbf_live_… gerekli (Panel → Telsiz → Düzeltici makineler → Makine ekle).');
+  if (!values.key) die('--key sbf_live_… gerekli. Anahtarsız bağlanmak için: signalbird login');
   cfg.fix.key = values.key.trim();
   assertFixAllowed(cfg);
 
   // Kaydetmeden önce dene: yanlış anahtar ayar dosyasına girmesin.
   try {
-    const res = await fixClient(cfg, { retry: false })('POST', '/v1/fix/hello', { version: VERSION, protocol: 1, links: [], agents: {} });
+    const res = await fixClient(cfg, { retry: false })('POST', '/v1/fix/hello', {
+      version: VERSION,
+      protocol: FIX_PROTOCOL,
+      links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
+      projects: discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
+      agents: {},
+    });
     saveConfig(cfg);
-    out(`✓ Bağlandı: makine "${res.machine?.name}" (takım ${res.machine?.team_id}).`);
+    out(`✓ Bağlandı: makine "${res.machine?.name}".`);
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) die('Anahtar reddedildi (401). Panelden doğru anahtarı kopyalayın.');
     die(err.message);
   }
   if (restart()) out('✓ Servis yeni anahtarla yeniden başlatıldı.');
-  else out('Sıradaki: signalbird fix link <domain> <klasör>');
+  else out('Sıradaki: signalbird login --root <proje kökü> (anahtar korunur) ya da signalbird fix install');
 }
 
 function printRepos(link) {
@@ -144,14 +248,17 @@ async function fixStatus() {
   out(`signalbird ${VERSION} · API ${cfg.api}`);
   out(`Anahtar: ${cfg.fix.key ? cfg.fix.key.slice(0, 16) + '…' : 'yok'}`);
   out(`Servis: ${svc.installed ? (svc.running ? `çalışıyor (pid ${svc.pid ?? '?'})` : 'kurulu, çalışmıyor') : 'kurulu değil'}`);
-  out(`Bağlar: ${cfg.fix.links.map(targetLabel).join(', ') || 'yok'}`);
+  const projects = discoverProjects(cfg.fix.roots);
+  out(`Proje kökü: ${cfg.fix.roots.join(', ') || 'yok (signalbird login --root …)'} · ${projects.length} proje`);
+  out(`Yerel bağlar: ${cfg.fix.links.map(targetLabel).join(', ') || 'yok'}`);
 
   if (cfg.fix.key) {
     try {
       const res = await fixClient(cfg, { retry: false })('POST', '/v1/fix/hello', {
         version: VERSION,
-        protocol: 1,
+        protocol: FIX_PROTOCOL,
         links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
+        projects: projects.map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
         agents: { claude: { version: claudeVersion(cfg), status: 'ready' } },
       });
       out(`Sunucu: makine "${res.machine?.name}", kuyrukta ${res.pending ?? 0} iş, temizlik bekleyen ${res.cleanup?.length ?? 0}`);
@@ -191,7 +298,14 @@ async function fixDoctor() {
 
   try {
     assertFixAllowed(cfg);
-    const res = await fixClient(cfg, { retry: false })('POST', '/v1/fix/hello', { version: VERSION, protocol: 1, links: [], agents: { claude: { version: cv, status: 'ready' } } });
+    // Servisin bildirdiği bağları/projeleri ezmemek için aynısını gönder.
+    const res = await fixClient(cfg, { retry: false })('POST', '/v1/fix/hello', {
+      version: VERSION,
+      protocol: FIX_PROTOCOL,
+      links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
+      projects: discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
+      agents: { claude: { version: cv, status: 'ready' } },
+    });
     check('API', true, `makine "${res.machine?.name}"`);
   } catch (err) {
     ok = check('API', false, err.message) && ok;
@@ -216,7 +330,9 @@ async function fixDoctor() {
     const repos = printRepos(link);
     if (!repos.some((r) => !r.problem)) ok = false;
   }
-  if (!cfg.fix.links.length) ok = check('bağ', false, 'yok → signalbird fix link <domain> <klasör>') && ok;
+  const projCount = discoverProjects(cfg.fix.roots).length;
+  check('projeler', projCount > 0 || cfg.fix.links.length > 0, `${projCount} proje (${cfg.fix.roots.join(', ') || 'kök yok'}) · ${cfg.fix.links.length} yerel bağ`);
+  if (!projCount && !cfg.fix.links.length) ok = false;
 
   process.exitCode = ok ? 0 : 1;
 }
@@ -332,6 +448,10 @@ export async function main(argv) {
   const [cmd, ...rest] = argv;
   try {
     switch (cmd) {
+      case 'login':
+        return await login(rest);
+      case 'logout':
+        return await logout();
       case 'fix':
         return await fix(rest);
       case 'send':

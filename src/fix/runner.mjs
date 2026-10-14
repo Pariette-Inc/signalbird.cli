@@ -13,6 +13,7 @@ import { log, redact, warn } from '../log.mjs';
 import { FIX_PROTOCOL, VERSION } from '../version.mjs';
 import { claudeVersion, runClaude } from './agent.mjs';
 import { errText } from './git.mjs';
+import { discoverProjects } from './discover.mjs';
 import { buildPrompt, extractSummary, prBody, prTitle } from './prompt.mjs';
 import { finalize, ghOpenPr, jobDir, listJobs, prepare, removeJob, writeMarker } from './workspace.mjs';
 
@@ -143,13 +144,34 @@ export class FixRunner {
     saveState(this.cfg, this.state);
   }
 
-  // Ayar dosyası her turda yeniden okunur: `fix link` sonrası yeniden başlatma gerekmez.
+  // Ayar dosyası ve proje kökü her turda yeniden okunur: `fix link` ya da
+  // klasöre yeni bir proje eklemek yeniden başlatma gerektirmez.
   reloadLinks() {
     try {
-      this.cfg.fix.links = loadConfig().fix.links;
+      const fresh = loadConfig().fix;
+      this.cfg.fix.links = fresh.links;
+      this.cfg.fix.roots = fresh.roots;
     } catch (err) {
       warn(err.message);
     }
+    this.projects = discoverProjects(this.cfg.fix.roots || []);
+  }
+
+  /** İşin çalışacağı yer: sunucunun seçtiği proje (§12.4) ya da yerel bağ. */
+  resolveLink(job) {
+    if (job.project) {
+      let p = (this.projects || []).find((x) => x.name === job.project);
+      if (!p) {
+        this.projects = discoverProjects(this.cfg.fix.roots || []);
+        p = this.projects.find((x) => x.name === job.project);
+      }
+      if (p) {
+        // Aynı domain için yerel bağ varsa hedef dal / repo kısıtı oradan gelir.
+        const local = findLink(this.cfg.fix.links, job);
+        return { root: p.path, base: local?.base ?? null, repos: local?.repos ?? null };
+      }
+    }
+    return findLink(this.cfg.fix.links, job);
   }
 
   async hello() {
@@ -162,6 +184,7 @@ export class FixRunner {
       version: VERSION,
       protocol: FIX_PROTOCOL,
       links: this.cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
+      projects: (this.projects || []).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
       agents: { claude: { version, status } },
       busy_job_id: this.current?.job.id || null,
     });
@@ -299,7 +322,7 @@ export class FixRunner {
       this.localSweep();
 
       if (this.agentStatus() !== 'ready') return;
-      if (!this.cfg.fix.links.length) return;
+      if (!this.cfg.fix.links.length && !(this.projects || []).length) return;
 
       for (;;) {
         const res = await this.api('POST', '/v1/fix/jobs/claim');
@@ -309,7 +332,7 @@ export class FixRunner {
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        warn('Anahtar geçersiz (401). Panelden yeni anahtar alıp: signalbird fix login --key …');
+        warn('Oturum geçersiz (401): bu bilgisayar panelden silinmiş ya da anahtarı yenilenmiş olabilir. Tekrar bağlamak için: signalbird login');
         // Çıkış kodu 0: servis yöneticisi yeniden başlatıp 401 döngüsüne girmesin.
         // `fix login` yeni anahtarı yazınca servisi kendisi yeniden başlatır.
         this.stopping = true;
@@ -324,7 +347,7 @@ export class FixRunner {
   }
 
   async processJob(job) {
-    const link = findLink(this.cfg.fix.links, job);
+    const link = this.resolveLink(job);
     const abort = new AbortController();
     this.current = { job, abort };
     const logs = createLogUploader(this.api, job);
@@ -334,7 +357,11 @@ export class FixRunner {
 
     let cancelTimer;
     try {
-      if (!link) throw new Error('Bu iş için yerel bağ yok (fix link). Sunucu eşleşmesiyle yerel ayar uyuşmuyor.');
+      if (!link) {
+        throw new Error(job.project
+          ? `"${job.project}" projesi bu bilgisayarda bulunamadı (proje kökü: ${(this.cfg.fix.roots || []).join(', ') || 'yok'}).`
+          : 'Bu iş için bu bilgisayarda proje yok. Panelde Janet → Projeler bölümünden eşleyin.');
+      }
 
       await this.report(job.id, { status: 'running' });
       logs.line(`● ${job.code} başladı · ${os.hostname()} · ${link.root}`);
@@ -438,8 +465,9 @@ export class FixRunner {
   async start() {
     assertFixAllowed(this.cfg);
     mkdirSync(this.cfg.fix.workdir, { recursive: true });
-    log(`signalbird fix ${VERSION} başladı · ${this.cfg.api} · ${this.cfg.fix.links.length} bağ`);
-    if (!this.cfg.fix.links.length) warn('Hiç bağ yok. Örnek: signalbird fix link adall.io ~/git/adall');
+    this.reloadLinks();
+    log(`Janet ${VERSION} başladı · ${this.cfg.api} · ${(this.projects || []).length} proje (${(this.cfg.fix.roots || []).join(', ') || 'kök yok'}) · ${this.cfg.fix.links.length} yerel bağ`);
+    if (!(this.projects || []).length && !this.cfg.fix.links.length) warn('Hiç proje yok. Proje kökünü ayarlamak için: signalbird login --root ~/git');
 
     const stop = () => {
       if (this.stopping) process.exit(1);

@@ -130,7 +130,7 @@ test('iş: claim → klon → claude → push → PR → çözüldü → silindi
   assert.equal(patches[0].status, 'running');
   const final = patches.at(-1);
   assert.equal(final.status, 'pr_open', JSON.stringify(final));
-  assert.equal(final.branch, 'sb-fix/SBF-T1');
+  assert.equal(final.branch, 'janet/SBF-T1');
   assert.equal(final.prs.length, 1);
   assert.equal(final.prs[0].repo, 'Org/adall.api');
   assert.equal(final.prs[0].base, 'test'); // test dalı main'e tercih edilir
@@ -144,7 +144,7 @@ test('iş: claim → klon → claude → push → PR → çözüldü → silindi
   assert.ok(!existsSync(join(jobdir, 'adall.web')));
 
   // Dal gerçekten "GitHub"a gitti ve düzeltmeyi taşıyor.
-  assert.equal(sh(api.bare, 'show', 'sb-fix/SBF-T1:app.txt'), 'fixed');
+  assert.equal(sh(api.bare, 'show', 'janet/SBF-T1:app.txt'), 'fixed');
   // Ana yerel repo hiç değişmedi, worktree kaydı yok.
   assert.equal(readFileSync(join(api.local, 'app.txt'), 'utf8'), 'bug\n');
   assert.doesNotMatch(sh(api.local, 'worktree', 'list'), /SBF-T1/);
@@ -175,11 +175,11 @@ test('takip: aynı dala devam eder, mevcut PR\'a push eder', async () => {
   let opened = 0;
   const openPr = () => ({ url: 'u', number: ++opened });
   finalize({ job, ws: ws1, title: 't', openPr });
-  assert.equal(sh(api.bare, 'show', 'sb-fix/SBF-T2:app.txt'), 'v1');
+  assert.equal(sh(api.bare, 'show', 'janet/SBF-T2:app.txt'), 'v1');
 
   // Klon silinmiş olsa bile uzaktaki iş dalından yeniden kurulur.
   removeJob(c.fix.workdir, 'SBF-T2', { force: true });
-  const job2 = { ...job, attempt: 2, branch: 'sb-fix/SBF-T2', instruction: 'devam' };
+  const job2 = { ...job, attempt: 2, branch: 'janet/SBF-T2', instruction: 'devam' };
   const ws2 = prepare({ job: job2, link: c.fix.links[0], workdir: c.fix.workdir });
   const clone = join(ws2.dir, 'adall.api');
   assert.equal(readFileSync(join(clone, 'app.txt'), 'utf8'), 'v1\n');
@@ -187,7 +187,7 @@ test('takip: aynı dala devam eder, mevcut PR\'a push eder', async () => {
   sh(clone, 'commit', '-qam', 'v2');
   const fin = finalize({ job: job2, ws: ws2, title: 't', openPr });
   assert.equal(fin.problems.length, 0, fin.problems.join());
-  assert.equal(sh(api.bare, 'show', 'sb-fix/SBF-T2:app.txt'), 'v2');
+  assert.equal(sh(api.bare, 'show', 'janet/SBF-T2:app.txt'), 'v2');
 });
 
 test('removeJob: pushlanmamış commit varsa force olmadan korur', () => {
@@ -211,4 +211,46 @@ test('fix root ile ya da yanlış anahtarla çalışmaz', async () => {
   const c = cfg();
   c.fix.key = 'sba_live_' + 'x'.repeat(40);
   assert.throws(() => assertFixAllowed(c), /düzeltici anahtarı değil/);
+});
+
+test('protokol 2: yerel bağ yok, sunucu projeyi seçer; hello projeleri bildirir', async () => {
+  const { discoverProjects } = await import('../src/fix/discover.mjs');
+  const c = cfg();
+  c.fix.links = [];
+  c.fix.roots = [join(project, '..')];
+  const runner = new FixRunner({ cfg: c, openPr: ({ repo }) => ({ url: `https://github.com/${repo.slug}/pull/9`, number: 9 }) });
+  runner.reloadLinks = () => {
+    runner.projects = discoverProjects(c.fix.roots);
+  };
+
+  calls.length = 0;
+  jobQueue = [{ ...JOB, id: 'fix_P2', code: 'SBF-P2', domain: 'baska.io', project: 'project' }];
+  await runner.tick();
+
+  const hello = calls.find((x) => x.url === '/api/v1/fix/hello');
+  const names = hello.body.projects.map((p) => p.name);
+  assert.ok(names.includes('project'), names.join());
+  assert.deepEqual(hello.body.projects.find((p) => p.name === 'project').repos, ['adall.api', 'adall.web']);
+  assert.equal(hello.body.protocol, 2);
+
+  const final = calls.filter((x) => x.method === 'PATCH' && x.url.endsWith('/fix_P2')).at(-1).body;
+  assert.equal(final.status, 'pr_open', JSON.stringify(final));
+  assert.equal(final.branch, 'janet/SBF-P2');
+});
+
+test('protokol 2: seçilen proje bu bilgisayarda yoksa iş anlaşılır hatayla düşer', async () => {
+  const c = cfg();
+  c.fix.links = [];
+  c.fix.roots = [join(project, '..')];
+  const runner = new FixRunner({ cfg: c, openPr: () => ({ url: 'u', number: 1 }) });
+  runner.reloadLinks = () => {
+    runner.projects = [];
+  };
+  calls.length = 0;
+  jobQueue = [{ ...JOB, id: 'fix_P3', code: 'SBF-P3', domain: 'baska.io', project: 'yok-boyle-proje' }];
+  // projects boşken tick claim etmez; doğrudan işle.
+  await runner.processJob(jobQueue.shift());
+  const final = calls.filter((x) => x.method === 'PATCH' && x.url.endsWith('/fix_P3')).at(-1).body;
+  assert.equal(final.status, 'failed');
+  assert.match(final.error, /yok-boyle-proje/);
 });
