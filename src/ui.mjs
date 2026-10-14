@@ -94,3 +94,38 @@ export async function ask(question, def) {
     rl.close();
   }
 }
+
+/**
+ * Gizli değer sorusu (anahtar). Terminal uzun bir anahtarı ekranda iki
+ * satıra böler; kopyalanınca araya satır sonu girer ve readline yalnız ilk
+ * satırı alırdı (14 Eki). Yapıştırma tek seferde gelir: ilk satırdan sonra
+ * kısa bir süre daha dinlenir, gelen tüm satırlar boşluksuz birleştirilir.
+ */
+export async function askSecret(question) {
+  if (!process.stdin.isTTY) {
+    let data = '';
+    for await (const chunk of process.stdin) data += chunk;
+    return data.replace(/\s+/g, '');
+  }
+  const { createInterface } = await import('node:readline');
+  console.log(`${IND}${c.bold(question)}`);
+  process.stdout.write(`${IND}${c.violet('›')} `);
+  const rl = createInterface({ input: process.stdin, terminal: false });
+  return new Promise((resolve) => {
+    const parts = [];
+    let timer;
+    const finish = () => {
+      rl.close();
+      resolve(parts.join('').replace(/\s+/g, ''));
+    };
+    rl.on('line', (line) => {
+      parts.push(line);
+      clearTimeout(timer);
+      timer = setTimeout(finish, 400);
+    });
+    rl.on('close', () => {
+      clearTimeout(timer);
+      resolve(parts.join('').replace(/\s+/g, ''));
+    });
+  });
+}
