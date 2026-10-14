@@ -1,7 +1,7 @@
 # signalbird.cli Protokolü
 
 > yazar: ahmet selim çil | ahmet@pariette.com
-> fix protokolü sürümü: 2 · sunucu ajanı protokolü: 1 (bkz. `docs/AGENT-PROTOCOL.md`)
+> fix protokolü sürümü: 3 · sunucu ajanı protokolü: 1 (bkz. `docs/AGENT-PROTOCOL.md`)
 >
 > **Protokol 2 (14 Eki 2026) §12'dedir ve çakışan her maddede öncekinin yerine geçer:**
 > düzelticinin adı **Janet**; makine hesapla (tarayıcı onayı) bağlanır ve kullanıcıya aittir;
@@ -486,3 +486,71 @@ iş JSON'unda `"routing": { "state": "no_machine" | "no_project" | "ok",
 | `GET projects` | Takımın domain'leri ve kanalları × makinelerimdeki projeler, önerilen ve kayıtlı eşleme |
 | `PUT projects` `{domain_id | channel_key, machine_id, project}` · `DELETE projects/{id}` | Açık eşleme |
 | `PATCH team-settings` `{janet_enabled}` | Takım anahtarı |
+
+---
+
+## 13. Sohbet — Janet'la konuşma (protokol 3, 14 Eki 2026)
+
+> Ahmet: "görev kapatmadan önce janeta yorum eklemek istesem? aynı problemde
+> bana bir şeyler sorsa veya söylese, cevap vermem gerekse ne olacak? bence
+> basit formatta bi sohbet mantığı eklememiz gerekir."
+
+"Talimatla devam et" tek seferlik bir mesajdı ve geçmiş görünmüyordu. Artık
+her görevin bir **konuşması** vardır.
+
+### 13.1 Mesajlar
+
+`fix_job_messages`: `id`, `job_id`, `author` (`user` | `janet`), `user_id`
+(yazan kişi, janet için null), `kind`, `body` (≤ 8000), `attempt`,
+`created_at`.
+
+| `kind` | Kim | Ne zaman |
+| --- | --- | --- |
+| `summary` | janet | Deneme bitti (`pr_open` / `no_change` / `failed`); gövde = özet (ya da hata) |
+| `question` | janet | Janet bilgi istedi (`needs_input`); gövde = soru |
+| `message` | user | Kullanıcı yazdı ve Janet'ın devam etmesini istedi |
+| `note` | user | Yalnız not; Janet'ı çalıştırmaz, ama sonraki denemede okur |
+
+Janet mesajlarını **API** üretir (CLI'nın PATCH'inden); CLI ayrıca mesaj
+yazmaz.
+
+### 13.2 Yeni durum: `needs_input`
+
+Janet emin değilse ya da müşteriden bilgi gerekiyorsa kod değiştirmeden durur
+ve soru sorar. CLI: `PATCH { status: "needs_input", question, summary }`.
+Geçiş: `running → needs_input`. Terminal **değildir**; klon korunur; panel
+**"Cevap bekliyor"** gösterir ve görevi açan kişiye + makine sahibine bildirim
+gider ("Janet bir soru sordu").
+
+### 13.3 Kullanıcı mesajı
+
+`POST /api/v1/panel/fix/jobs/{id}/messages { "body": "…", "run": true }`
+
+- `run: true` ve iş `pr_open | no_change | failed | needs_input` → mesaj
+  kaydedilir, iş `queued` olur (eski `continue` gibi: aynı dal, aynı PR,
+  `attempt + 1`). `continue` ucu bunun kısa yoludur.
+- `run: true` ve iş `queued | claimed | running` → mesaj kaydedilir, iş
+  **değişmez**; deneme bitince (PATCH `pr_open | no_change | needs_input`)
+  denemenin başlangıcından sonra yazılmış `message` varsa iş **kendiliğinden**
+  yeniden kuyruğa girer. Panel "Janet bu denemeyi bitirince okuyacak" der.
+- `run: false` → `note`; durum değişmez.
+- Terminal işe (`resolved | rejected | canceled`) mesaj `409 JOB_CLOSED`.
+
+Yanıt: `{ message, job }`. `GET jobs/{id}` yanıtında `messages: [...]`
+(eskiden yeniye).
+
+### 13.4 Claim'de konuşma
+
+İşe `conversation: [{ author, kind, body, at, user }]` eklenir (son 30,
+eskiden yeniye). CLI prompt'a "Bu görevdeki konuşma" bölümü olarak koyar;
+**kullanıcı mesajları talimattır** (paneldeki yetkili takım üyesi yazdı) —
+telsiz olayı ise yine güvenilmeyen veridir (§10). `instruction` /
+`previous_summary` geriye dönük uyumluluk için durur.
+
+### 13.5 Janet ne zaman sorar
+
+Prompt kuralı: "Kök neden belirsizse, birden fazla makul düzeltme varsa ya da
+iş kuralı / ürün kararı gerekiyorsa kod değiştirme; son mesajın `SORU:`
+bölümüyle tek, net bir soru sorsun." CLI: son metinde `SORU:` var ve hiçbir
+repoda commit yoksa → `needs_input` (`question` = `SORU:` bölümü). Commit
+varsa normal `pr_open` raporlanır ve soru özetin parçası olarak kalır.
