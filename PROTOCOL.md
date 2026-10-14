@@ -461,9 +461,14 @@ Eşleme önceliği (bir iş hangi makineye/projeye gider):
 1. **Panelde açık eşleme** — `fix_project_links (team_id, domain_id | channel_key,
    machine_id, project)`; "adall.io → Ahmet MacBook / adall".
 2. **Makinedeki yerel bağ** — `fix link` ile `links`'te bildirilen domain/kanal.
-3. **Kendiliğinden** — domain'in ilk etiketi (`adall.io` → `adall`) bir proje
-   adına ya da bir repo adının başına eşitse. Sunucu hesaplar; panel
-   "eşleşti: adall" diye gösterir ve değiştirilebilir.
+3. **Kendiliğinden** — sunucu hesaplar; panel "Önerilen: adall" diye gösterir
+   ve tek tıkla onaylanır ya da değiştirilir. Etiket = domain'in ilk etiketi
+   (`www.` atılır; ilk etiket app/api/www/panel/admin/dashboard/test/staging ise
+   ve 3+ etiket varsa bir sonraki: `app.adall.io` → `adall`). Sıra:
+   a) etiket == proje adı, b) bir repo adı etiketle başlıyor,
+   c) etiket proje adıyla başlıyor ya da tersi, kısa taraf ≥ 4 karakter
+   (`submitcms.com` → `submit`). (c)'de farklı projeler berabere kalırsa öneri
+   **verilmez** — yanlış projede kod değiştirmektense sormak iyidir.
 
 Claim yanıtındaki işe `"project": "adall"` (1 ve 3) ya da `null` (2: CLI yerel
 bağdan çözer) eklenir. CLI `project` geldiyse `roots` altında o klasörü kullanır.

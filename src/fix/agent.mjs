@@ -2,11 +2,51 @@
 // görünmez, uzunluk sınırı yok); çıktı stream-json olarak okunup canlı loga
 // insan okunur satırlar hâlinde aktarılır.
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import os from 'node:os';
 import { EXTENDED_PATH, resolveBin, tryRun } from './git.mjs';
 
 export function claudeBin(cfg) {
   return resolveBin(cfg.fix.claude.bin || 'claude');
+}
+
+/**
+ * Claude'un ortamı. `fix.claude.env` (ör. CLAUDE_CODE_OAUTH_TOKEN, `claude
+ * setup-token` ile alınan uzun ömürlü anahtar) burada eklenir: terminal
+ * oturumu düşse de arka plan servisi çalışmaya devam eder.
+ */
+export function claudeEnv(cfg) {
+  return { ...process.env, ...(cfg.fix.claude.env || {}), PATH: EXTENDED_PATH, CI: '1', SIGNALBIRD_FIX: '1' };
+}
+
+/**
+ * Claude gerçekten çalışıyor mu? Sürüm komutu oturumu denetlemez; tek
+ * kelimelik bir istek gönderilir (~birkaç saniye, maliyeti yok denecek kadar az).
+ * @returns {{ ok: boolean, failure: string|null, detail: string }}
+ */
+export function probeClaude(cfg) {
+  const bin = claudeBin(cfg);
+  if (!bin) return { ok: false, failure: 'not_installed', detail: 'claude bulunamadı' };
+  let out;
+  try {
+    out = execFileSync(bin, ['-p', '--output-format', 'json', '--max-turns', '1'], {
+      input: 'Sadece OK yaz.',
+      encoding: 'utf8',
+      timeout: 90000,
+      env: claudeEnv(cfg),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: os.tmpdir(),
+    });
+  } catch (err) {
+    out = String(err.stdout || '') + String(err.stderr || '');
+  }
+  let res = null;
+  try {
+    res = JSON.parse(out.trim().split('\n').pop());
+  } catch {}
+  const text = res ? String(res.result ?? '') : out;
+  if (res && !res.is_error) return { ok: true, failure: null, detail: '' };
+  return { ok: false, failure: classifyFailure(text) || 'error', detail: text.slice(0, 200) };
 }
 
 export function claudeVersion(cfg) {
@@ -57,7 +97,7 @@ export function describeEvent(ev) {
   if (ev.type === 'result') {
     const cost = ev.total_cost_usd != null ? `, $${Number(ev.total_cost_usd).toFixed(2)}` : '';
     const dur = ev.duration_ms ? `, ${Math.round(ev.duration_ms / 1000)} sn` : '';
-    return `● bitti (${ev.subtype || 'result'}${dur}${cost})`;
+    return `● bitti (${ev.is_error ? 'hata' : ev.subtype || 'result'}${dur}${cost})`;
   }
   return null;
 }
@@ -79,7 +119,7 @@ export function runClaude({ cfg, cwd, prompt, model, onLine = () => {}, timeoutM
   return new Promise((resolve) => {
     const child = spawn(bin, args, {
       cwd,
-      env: { ...process.env, PATH: EXTENDED_PATH, CI: '1', SIGNALBIRD_FIX: '1' },
+      env: claudeEnv(cfg),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

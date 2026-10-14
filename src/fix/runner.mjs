@@ -11,7 +11,7 @@ import { ApiError, createClient } from '../api.mjs';
 import { findLink, loadConfig, saveConfig, targetLabel } from '../config.mjs';
 import { log, redact, warn } from '../log.mjs';
 import { FIX_PROTOCOL, VERSION } from '../version.mjs';
-import { claudeVersion, runClaude } from './agent.mjs';
+import { claudeVersion, probeClaude, runClaude } from './agent.mjs';
 import { errText } from './git.mjs';
 import { discoverProjects, suggestRoots } from './discover.mjs';
 import { buildPrompt, extractSummary, prBody, prTitle } from './prompt.mjs';
@@ -129,6 +129,19 @@ export class FixRunner {
 
   agentStatus() {
     const a = this.state.agent || { status: 'ready' };
+    // Oturum düşmüştü: kullanıcı `claude /login` ya da `fix claude-token`
+    // yaptıysa 10 dakikada bir denenir, çalışıyorsa Janet işe kendisi döner.
+    if (a.status === 'auth_required' && Date.now() - (this.lastProbe || 0) > 10 * 60000) {
+      this.lastProbe = Date.now();
+      try {
+        this.cfg.fix.claude = loadConfig().fix.claude;
+      } catch {}
+      if (probeClaude(this.cfg).ok) {
+        log('Claude oturumu geri geldi; Janet görev almaya devam ediyor.');
+        this.setAgentStatus('ready');
+        return 'ready';
+      }
+    }
     if (a.status === 'rate_limited' && a.until && Date.now() > Date.parse(a.until)) {
       this.state.agent = { status: 'ready', until: null };
       saveState(this.cfg, this.state);
@@ -419,7 +432,7 @@ export class FixRunner {
         const why = result.timedOut
           ? `Zaman aşımı (${job.limits?.timeout_minutes || 60} dk).`
           : result.failure === 'auth_required'
-            ? 'Claude oturumu düşmüş: bu bilgisayarda `claude` çalıştırıp giriş yapın, sonra `signalbird fix doctor`.'
+            ? 'Claude oturumu düşmüş. Kalıcı çözüm: terminalde `claude setup-token`, çıkan anahtarla `signalbird fix claude-token`. (Ya da `claude` → /login.) Janet oturum gelince kendisi devam eder; bu görevi panelden "Yeniden dene" ile tekrar kuyruğa alın.'
             : result.failure === 'rate_limited'
               ? 'Claude kullanım limiti doldu; makine 30 dk iş almayacak.'
               : `Claude hata ile bitti (çıkış ${result.exitCode}).`;
