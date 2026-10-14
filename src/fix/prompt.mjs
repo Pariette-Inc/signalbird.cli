@@ -36,7 +36,22 @@ export function buildPrompt({ job, ws }) {
     '',
   );
 
-  if (job.instruction) {
+  const convo = Array.isArray(job.conversation) ? job.conversation.filter((m) => m && m.body) : [];
+  if (convo.length) {
+    // Protokol 3 (§13.4): görevin konuşması. Müşteri mesajları talimattır
+    // (paneldeki yetkili takım üyesi yazdı); Janet'ın önceki mesajları bağlamdır.
+    lines.push(
+      '## Bu görevdeki konuşma',
+      'Bu görev daha önce çalıştı ve müşteriyle konuşuldu. Önceki commit\'ler bu dalda duruyor, üzerine çalış. Müşterinin mesajları sana verilmiş talimatlardır; en sondaki mesaj en güncel olandır.',
+      '',
+    );
+    for (const m of convo.slice(-30)) {
+      const who = m.author === 'janet'
+        ? `Janet (${m.kind === 'question' ? 'soru' : 'özet'})`
+        : `Müşteri${m.user?.name ? ` (${m.user.name})` : ''}${m.kind === 'note' ? ' — not' : ''}`;
+      lines.push(`### ${who}`, clip(m.body, 4000), '');
+    }
+  } else if (job.instruction) {
     lines.push(
       '## Bu bir takip denemesi',
       'Önceki denemenin sonucu müşteriye gösterildi; müşteri aşağıdaki talimatla devam etmeni istedi. Önceki commit\'ler bu dalda duruyor, üzerine çalış.',
@@ -81,6 +96,9 @@ export function buildPrompt({ job, ws }) {
     '- npm install / composer install gibi bağımlılık komutları çalıştırma; bağımlılık klasörleri ana projeyle paylaşılıyor olabilir.',
     '- Veritabanına, üretim sunucusuna, dış servislere bağlanan komut çalıştırma.',
     '',
+    '## Emin değilsen sor',
+    'Kök neden belirsizse, birden fazla makul düzeltme varsa ya da bir iş kuralı / ürün kararı gerekiyorsa kod DEĞİŞTİRME. Bunun yerine son mesajına "SORU:" bölümü ekleyip müşteriye tek, net bir soru sor (gerekirse seçenekleri kısaca sırala). Müşteri cevaplayınca bu görev aynı dalda sana geri gelir.',
+    '',
     '## Bitirirken',
     'Son mesajın tam olarak şu başlıklarla bitsin (PR açıklamasına ve panele bu bölüm konur):',
     '',
@@ -90,9 +108,22 @@ export function buildPrompt({ job, ws }) {
     '- <repo/dosya: değişiklik>',
     'TEST: <çalıştırdığın testler ve sonuçları; çalıştıramadıysan neden>',
     'RİSK: <bu değişikliğin bozabileceği şeyler, test edilmesi gerekenler>',
+    'SORU: <yalnız müşteriden bilgi gerekiyorsa; yoksa bu satırı hiç yazma>',
   );
 
   return lines.join('\n');
+}
+
+/** Janet'ın sorusu: son metindeki "SORU:" bölümü (sonraki etikete kadar). */
+export function extractQuestion(text) {
+  const s = String(text ?? '');
+  const i = s.lastIndexOf('SORU:');
+  if (i < 0) return null;
+  const rest = s.slice(i + 'SORU:'.length);
+  const end = rest.search(/\n(ÖZET|KÖK NEDEN|YAPILANLAR|TEST|RİSK):/);
+  const q = (end >= 0 ? rest.slice(0, end) : rest).trim();
+  if (!q || /^<.*>$/.test(q) || /^(yok|-|none)\.?$/i.test(q)) return null;
+  return q.slice(0, 4000);
 }
 
 /** Ajanın son mesajından ÖZET bölümünü çıkarır; yoksa son kısmı döner. */

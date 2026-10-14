@@ -1,6 +1,6 @@
 {
   "name": "signalbird-cli",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Signalbird komut satırı: telsiz alarmlarını yerel AI ajanına düzelttirip PR açar, sunucu ölçümü gönderir.",
   "type": "module",
   "bin": {
