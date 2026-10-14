@@ -8,12 +8,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 import { ApiError, createClient } from '../api.mjs';
-import { findLink, loadConfig, targetLabel } from '../config.mjs';
+import { findLink, loadConfig, saveConfig, targetLabel } from '../config.mjs';
 import { log, redact, warn } from '../log.mjs';
 import { FIX_PROTOCOL, VERSION } from '../version.mjs';
 import { claudeVersion, runClaude } from './agent.mjs';
 import { errText } from './git.mjs';
-import { discoverProjects } from './discover.mjs';
+import { discoverProjects, suggestRoots } from './discover.mjs';
 import { buildPrompt, extractSummary, prBody, prTitle } from './prompt.mjs';
 import { finalize, ghOpenPr, jobDir, listJobs, prepare, removeJob, writeMarker } from './workspace.mjs';
 
@@ -154,6 +154,22 @@ export class FixRunner {
     } catch (err) {
       warn(err.message);
     }
+    // Kök hiç ayarlanmamışsa (yarım kalmış login) kendisi bulur ve kaydeder.
+    if (!(this.cfg.fix.roots || []).length && !this.rootGuessed) {
+      this.rootGuessed = true;
+      const guess = suggestRoots()[0]?.root;
+      if (guess) {
+        try {
+          const full = loadConfig();
+          full.fix.roots = [guess];
+          saveConfig(full);
+          this.cfg.fix.roots = [guess];
+          log(`Proje kökü ayarlı değildi; bulundu ve kaydedildi: ${guess} (değiştirmek için: signalbird login --root <klasör>)`);
+        } catch (err) {
+          warn(`proje kökü kaydedilemedi: ${err.message}`);
+        }
+      }
+    }
     this.projects = discoverProjects(this.cfg.fix.roots || []);
   }
 
@@ -184,7 +200,8 @@ export class FixRunner {
       version: VERSION,
       protocol: FIX_PROTOCOL,
       links: this.cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
-      projects: (this.projects || []).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
+      // Kök bilinmiyorsa alan hiç gönderilmez: sunucudaki son liste silinmesin.
+      projects: (this.cfg.fix.roots || []).length ? (this.projects || []).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
       agents: { claude: { version, status } },
       busy_job_id: this.current?.job.id || null,
     });
