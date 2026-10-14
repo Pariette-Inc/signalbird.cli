@@ -25,6 +25,10 @@ function unitPath() {
 
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 export function install() {
   mkdirSync(join(homeDir(), 'fix'), { recursive: true });
   const args = [process.execPath, BIN, 'fix', 'start'];
@@ -55,7 +59,14 @@ export function install() {
     mkdirSync(join(os.homedir(), 'Library', 'LaunchAgents'), { recursive: true });
     tryRun('launchctl', ['bootout', `gui/${uid}/${LABEL}`]);
     writeFileSync(plistPath(), plist);
-    const ok = tryRun('launchctl', ['bootstrap', `gui/${uid}`, plistPath()]);
+    // bootout eşzamansızdır: eski servis tam inmeden bootstrap "Input/output
+    // error" (5) verir. İnmesini bekle, sonra birkaç kez dene (14 Eki 2026).
+    for (let i = 0; i < 20 && tryRun('launchctl', ['print', `gui/${uid}/${LABEL}`]) !== null; i++) sleepMs(500);
+    let ok = null;
+    for (let i = 0; i < 5 && ok === null; i++) {
+      if (i) sleepMs(1000);
+      ok = tryRun('launchctl', ['bootstrap', `gui/${uid}`, plistPath()]);
+    }
     if (ok === null) throw new Error(`launchctl bootstrap başarısız. Elle: launchctl bootstrap gui/${uid} ${plistPath()}`);
     return { kind: 'launchd', path: plistPath(), log: logFile() };
   }
