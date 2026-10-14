@@ -44,7 +44,25 @@ export function writeMarker(dir, data) {
 }
 
 /** node_modules/vendor: aynı APFS diskinde klon (saniyeler), aksi hâlde symlink. */
+/**
+ * Bağımlılık bağlarını git'e görünmez yapar. `.gitignore` çoğu zaman
+ * `vendor/` / `node_modules/` yazar; sondaki `/` yalnız KLASÖRÜ dışlar,
+ * bizim koyduğumuz sembolik bağı değil. Git onu yeni dosya sanıyor, Janet de
+ * "commit edilmemiş değişiklik" diye commit'leyip PR açıyordu (14 Eki,
+ * veribenim.php.sdk#1). Yalnız bu klonun .git/info/exclude'una yazılır.
+ */
+function excludeDeps(dst) {
+  try {
+    const file = join(dst, '.git', 'info', 'exclude');
+    mkdirSync(join(dst, '.git', 'info'), { recursive: true });
+    const cur = existsSync(file) ? readFileSync(file, 'utf8') : '';
+    const add = DEP_DIRS.map((d) => `/${d}`).filter((l) => !cur.split('\n').includes(l));
+    if (add.length) writeFileSync(file, cur + (cur.endsWith('\n') || !cur ? '' : '\n') + '# Janet: bağımlılık bağları\n' + add.join('\n') + '\n');
+  } catch {}
+}
+
 function linkDeps(src, dst, log) {
+  excludeDeps(dst);
   for (const dep of DEP_DIRS) {
     const from = join(src, dep);
     const to = join(dst, dep);
@@ -166,6 +184,7 @@ export function finalize({ job, ws, title, body, openPr, log = () => {} }) {
         continue;
       }
 
+      excludeDeps(clone);
       if (tryGit(clone, 'status', '--porcelain')) {
         git(clone, 'add', '-A');
         git(clone, 'commit', '-q', '-m', `${job.code}: ajanın commit etmediği değişiklikler`);

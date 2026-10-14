@@ -254,3 +254,24 @@ test('protokol 2: seçilen proje bu bilgisayarda yoksa iş anlaşılır hatayla 
   assert.equal(final.status, 'failed');
   assert.match(final.error, /yok-boyle-proje/);
 });
+
+test('bağımlılık kısayolu (vendor/ → symlink) commit edilmez, PR açılmaz', async () => {
+  const { symlinkSync, mkdirSync: mk } = await import('node:fs');
+  const c = cfg();
+  const job = { ...JOB, id: 'fix_V1', code: 'SBF-V1' };
+  const ws = prepare({ job, link: c.fix.links[0], workdir: c.fix.workdir });
+  const clone = join(ws.dir, 'adall.api');
+  writeFileSync(join(clone, '.gitignore'), 'vendor/\nnode_modules/\n');
+  sh(clone, 'add', '.gitignore');
+  sh(clone, 'commit', '-qm', 'gitignore');
+  sh(clone, 'push', '-q', 'origin', `HEAD:refs/heads/${ws.repos[0].base}`);
+  sh(clone, 'fetch', '-q', 'origin');
+  sh(clone, 'reset', '-q', '--hard', `origin/${ws.repos[0].base}`);
+  const real = join(base, 'real-vendor');
+  mk(real, { recursive: true });
+  symlinkSync(real, join(clone, 'vendor'), 'dir');
+  let opened = 0;
+  const fin = finalize({ job, ws, title: 't', openPr: () => ({ url: 'u', number: ++opened }) });
+  assert.equal(opened, 0, 'PR açılmamalı');
+  assert.deepEqual(fin.prs, []);
+});
