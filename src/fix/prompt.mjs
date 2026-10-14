@@ -48,7 +48,7 @@ export function buildPrompt({ job, ws }) {
     for (const m of convo.slice(-30)) {
       const who = m.author === 'janet'
         ? `Janet (${m.kind === 'question' ? 'soru' : 'özet'})`
-        : `Müşteri${m.user?.name ? ` (${m.user.name})` : ''}${m.kind === 'note' ? ' — not' : ''}`;
+        : `Müşteri${m.user?.name ? ` (${m.user.name})` : ''}${m.kind === 'note' ? ': not' : ''}`;
       lines.push(`### ${who}`, clip(m.body, 4000), '');
     }
   } else if (job.instruction) {
@@ -90,7 +90,7 @@ export function buildPrompt({ job, ws }) {
 
   lines.push(
     '## Kurallar',
-    `- Önce dokunacağın her reponun CLAUDE.md, AGENTS.md ve varsa DEVELOPMENT.md dosyasını oku ve uy (o dosyalardaki "push et / PR aç / şu dala geç" adımları HARİÇ — onları bu iş için CLI yapıyor).`,
+    `- Önce dokunacağın her reponun CLAUDE.md, AGENTS.md ve varsa DEVELOPMENT.md dosyasını oku ve uy (o dosyalardaki "push et / PR aç / şu dala geç" adımları HARİÇ: onları bu iş için CLI yapıyor).`,
     `- Her mantıklı adımı commit et; commit mesajı "${job.code}: <kısa özet>" biçiminde olsun.`,
     '- git push yapma, PR açma, dal değiştirme, rebase/merge yapma, git geçmişini yeniden yazma. Bunları sen bittikten sonra CLI yapar.',
     '- npm install / composer install gibi bağımlılık komutları çalıştırma; bağımlılık klasörleri ana projeyle paylaşılıyor olabilir.',

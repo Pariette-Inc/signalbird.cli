@@ -122,7 +122,7 @@ function openLog(path, maxBytes) {
 }
 
 /**
- * Tampondaki tam satırları verir: [{ text, end }] — `end` satırın "\n"
+ * Tampondaki tam satırları verir: [{ text, end }]: `end` satırın "\n"
  * dahil bittiği göreli bayt. "\n" baytı UTF-8 çok baytlı dizilerin içinde
  * geçmez, bu yüzden bayt düzeyinde bölmek güvenlidir.
  */

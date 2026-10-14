@@ -180,7 +180,7 @@ export class AgentRunner {
       return { ok: true, status: res.status };
     }
     const code = res.json?.code || '';
-    const hint = code === 'UNKNOWN_SIGNAL_KEY' ? ' — panelde bu anahtarla bir izleme yok' : '';
+    const hint = code === 'UNKNOWN_SIGNAL_KEY' ? ': panelde bu anahtarla bir izleme yok' : '';
     this.log('uyari', `sinyal iletilemedi: ${body.key} (HTTP ${res.status}${code ? ` ${code}` : ''})${hint}`);
     return { ok: false, status: res.status, code };
   }

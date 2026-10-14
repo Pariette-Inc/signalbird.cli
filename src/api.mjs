@@ -1,5 +1,5 @@
 // Signalbird API istemcisi. Geçici hatalar (ağ, 5xx, 429) üç kez denenir;
-// 4xx hemen fırlatılır — tekrar denemek kalıcı bir hatayı düzeltmez.
+// 4xx hemen fırlatılır: tekrar denemek kalıcı bir hatayı düzeltmez.
 
 import os from 'node:os';
 import { VERSION } from './version.mjs';

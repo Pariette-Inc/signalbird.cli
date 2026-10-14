@@ -46,7 +46,7 @@ Kurallar (tartışmaya kapalı):
 4. **Yerel yol sunucuya gitmez.** API yalnız domain / kanal adını ve proje
    kökünün altındaki klasör ve repo **adlarını** bilir (`adall`, `adall.api`);
    `/Volumes/…/git/adall` gibi tam yollar bilgisayarda kalır. Ad gönderilir,
-   çünkü eşleme panelde yapılır (§12.3) — adı bilmeyen panel öneri sunamaz.
+   çünkü eşleme panelde yapılır (§12.3): adı bilmeyen panel öneri sunamaz.
 5. **Yalnız PR.** Düzeltici hiçbir zaman hedef dala doğrudan push etmez.
 6. **Gizli bilgi prompt'a girmez.** Ajan yerel ortamını kullanır; API'den sır
    gelmez.
@@ -97,7 +97,7 @@ yine de kaydolur).
 | `canceled` | Müşteri durdurdu | **silinir** |
 
 Terminal durumlar: `no_change`, `failed`, `resolved`, `rejected`, `canceled`.
-API terminal bir işe gelen her `PATCH`'i `409 JOB_CLOSED` ile reddeder —
+API terminal bir işe gelen her `PATCH`'i `409 JOB_CLOSED` ile reddeder :
 SistemTakip'te geç gelen rapor "başarısız" işi "başarılı"ya çeviriyordu.
 
 `failed` ve `no_change` işler panelden **Yeniden dene** ile `queued`'a döner
@@ -128,7 +128,7 @@ User-Agent: signalbird-cli/0.1.0 (darwin; fix)
 
 ---
 
-## 5. Uçlar (fix) — `/api/v1/fix/*`
+## 5. Uçlar (fix): `/api/v1/fix/*`
 
 ### 5.1 `POST /hello`
 
@@ -243,7 +243,7 @@ taşımaz**: `fix.job` (yeni iş var → claim et), `fix.cleanup` (hello at),
 
 ---
 
-## 6. Panel uçları — `/api/v1/panel/fix/*`
+## 6. Panel uçları: `/api/v1/panel/fix/*`
 
 `auth:sanctum` + `ability:integrations` + `module:logger`, takım `X-Team-Id`.
 
@@ -341,7 +341,7 @@ Bittiğinde:
   dokunulmayanlar temizlenir. Pushlanmamış commit'i ya da commit edilmemiş
   değişikliği olan klona `--force` olmadan dokunulmaz.
 
-Log `seq` değeri `(attempt - 1) * 100000 + n` — her deneme kendi aralığında
+Log `seq` değeri `(attempt - 1) * 100000 + n`: her deneme kendi aralığında
 sayar, `unique(job_id, seq)` çakışmaz.
 
 ---
@@ -376,7 +376,7 @@ Komut: `claude -p --output-format stream-json --verbose --dangerously-skip-permi
 
 ---
 
-## 12. Protokol 2 — Janet, hesapla giriş, panelde proje eşleme (14 Eki 2026)
+## 12. Protokol 2: Janet, hesapla giriş, panelde proje eşleme (14 Eki 2026)
 
 > Ahmet: "her seferinde login mi yapıcaz? oturum açtığım mail hesabına bağlı
 > olarak giriş yapmak daha doğru olmaz mı?" · "makinemde hiç bir işlem yapmamız
@@ -458,17 +458,17 @@ her hello'da yeniden tarar: kökün altındaki her klasör ya bir git deposudur
 (tek repolu proje) ya da bir alt seviyesinde git depoları vardır.
 
 Eşleme önceliği (bir iş hangi makineye/projeye gider):
-1. **Panelde açık eşleme** — `fix_project_links (team_id, domain_id | channel_key,
+1. **Panelde açık eşleme**: `fix_project_links (team_id, domain_id | channel_key,
    machine_id, project)`; "adall.io → Ahmet MacBook / adall".
-2. **Makinedeki yerel bağ** — `fix link` ile `links`'te bildirilen domain/kanal.
-3. **Kendiliğinden** — sunucu hesaplar; panel "Önerilen: adall" diye gösterir
+2. **Makinedeki yerel bağ**: `fix link` ile `links`'te bildirilen domain/kanal.
+3. **Kendiliğinden**: sunucu hesaplar; panel "Önerilen: adall" diye gösterir
    ve tek tıkla onaylanır ya da değiştirilir. Etiket = domain'in ilk etiketi
    (`www.` atılır; ilk etiket app/api/www/panel/admin/dashboard/test/staging ise
    ve 3+ etiket varsa bir sonraki: `app.adall.io` → `adall`). Sıra:
    a) etiket == proje adı, b) bir repo adı etiketle başlıyor,
    c) etiket proje adıyla başlıyor ya da tersi, kısa taraf ≥ 4 karakter
    (`submitcms.com` → `submit`). (c)'de farklı projeler berabere kalırsa öneri
-   **verilmez** — yanlış projede kod değiştirmektense sormak iyidir.
+   **verilmez**: yanlış projede kod değiştirmektense sormak iyidir.
 
 Claim yanıtındaki işe `"project": "adall"` (1 ve 3) ya da `null` (2: CLI yerel
 bağdan çözer) eklenir. CLI `project` geldiyse `roots` altında o klasörü kullanır.
@@ -489,7 +489,7 @@ iş JSON'unda `"routing": { "state": "no_machine" | "no_project" | "ok",
 
 ---
 
-## 13. Sohbet — Janet'la konuşma (protokol 3, 14 Eki 2026)
+## 13. Sohbet: Janet'la konuşma (protokol 3, 14 Eki 2026)
 
 > Ahmet: "görev kapatmadan önce janeta yorum eklemek istesem? aynı problemde
 > bana bir şeyler sorsa veya söylese, cevap vermem gerekse ne olacak? bence
@@ -543,7 +543,7 @@ Yanıt: `{ message, job }`. `GET jobs/{id}` yanıtında `messages: [...]`
 
 İşe `conversation: [{ author, kind, body, at, user }]` eklenir (son 30,
 eskiden yeniye). CLI prompt'a "Bu görevdeki konuşma" bölümü olarak koyar;
-**kullanıcı mesajları talimattır** (paneldeki yetkili takım üyesi yazdı) —
+**kullanıcı mesajları talimattır** (paneldeki yetkili takım üyesi yazdı) :
 telsiz olayı ise yine güvenilmeyen veridir (§10). `instruction` /
 `previous_summary` geriye dönük uyumluluk için durur.
 
