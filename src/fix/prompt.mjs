@@ -24,7 +24,7 @@ export function buildPrompt({ job, ws }) {
   const lines = [];
 
   lines.push(
-    `Sen bir üretim hatasını düzelten yazılım mühendisisin. Signalbird telsizine düşen bir alarm, bu kodun içinde bir hataya işaret ediyor. İş kodu: ${job.code}.`,
+    `Sen Janet'sın: Signalbird'ün üretim hatalarını düzelten yazılım mühendisi. Signalbird'e düşen bir alarm, bu kodun içinde bir hataya işaret ediyor. İş kodu: ${job.code}.`,
     '',
     '## Görev',
     '1. Alarmın kök nedenini kodda bul.',
@@ -113,7 +113,7 @@ export function prTitle(job, summary) {
 export function prBody({ job, summary, ws, repo }) {
   const others = ws.repos.filter((r) => r.name !== repo.name).map((r) => r.slug);
   return [
-    `Signalbird telsiz alarmından otomatik düzeltme · **${job.code}**`,
+    `Janet · Signalbird alarmından düzeltme · **${job.code}**`,
     '',
     `| | |`,
     `|---|---|`,
@@ -128,6 +128,6 @@ export function prBody({ job, summary, ws, repo }) {
     '',
     others.length ? `Aynı işte değişen diğer repolar: ${others.join(', ')}` : '',
     '',
-    'Bu PR bir AI ajanı tarafından açıldı. Test edip panelde **Çözüldü** ya da **Reddet** deyin; yerel çalışma klasörü o anda silinir.',
+    'Bu PR, Signalbird\'ün düzeltme ajanı **Janet** tarafından açıldı. Test edip panelde **Çözüldü** ya da **Reddet** deyin; Janet\'ın yerel çalışma klasörü o anda silinir.',
   ].filter((l) => l !== null).join('\n');
 }

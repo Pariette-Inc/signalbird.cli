@@ -4,7 +4,7 @@ Signalbird'ün komut satırı aracı. Üç işi var:
 
 | Rol | Ne yapar | Nerede |
 | --- | --- | --- |
-| **Düzeltici** (`signalbird fix`) | Telsize düşen alarmı bilgisayarınızdaki Claude'a verir; Claude kodu düzeltir, CLI dalı push edip PR açar. Panelde "Çözüldü" dediğinizde yerel klon silinir. | Geliştirici bilgisayarı |
+| **Janet** (`signalbird login`, `signalbird fix`) | Signalbird'e düşen alarmı bilgisayarınızdaki Claude'a verir; Claude kodu düzeltir, Janet dalı push edip PR açar. Panelde "Çözüldü" dediğinizde yerel klon silinir. | Geliştirici bilgisayarı |
 | **Gönderici** (`signalbird send`) | Telsize tek mesaj yazar (deploy, cron, betik). | Her yer |
 | **Sunucu ajanı** (`signalbird agent`) | Ölçüm, log, beklenen sinyal gönderir; **komut almaz**. agent.signalbird (bash) ajanının yerini alır. | Sunucu (root) |
 
@@ -12,22 +12,34 @@ yazar: ahmet selim çil | ahmet@pariette.com · sözleşme: [PROTOCOL.md](PROTOC
 
 ---
 
-## Düzeltici: 4 komut
+## Janet: bilgisayarda bir kez, gerisi panelden
 
 ```bash
 npm i -g signalbird-cli
-signalbird fix login --key sbf_live_…          # Panel → Telsiz → Düzeltici makineler → Makine ekle
-signalbird fix link adall.io ~/git/adall        # domain → proje klasörü
-signalbird fix install                          # açılışta başlar (launchd / systemd --user)
+signalbird login
 ```
 
-Sonra panelde ilgili kanalın ayarında **Kod düzeltmesi**'ni açın. O kanala
-düşen her mesaj bu bilgisayara iş olarak gelir.
+`signalbird login`:
+1. Tarayıcıyı açar; Signalbird hesabınızla **"Bu bilgisayarı bağla"** dersiniz.
+   Anahtar kopyalamak yok. Bilgisayar **hesabınıza** bağlanır ve üyesi
+   olduğunuz her takımın Janet işlerini alabilir.
+2. Projelerinizin durduğu klasörü bulur (ör. `/Volumes/solidCloud/git`) ya da
+   sorar. Altındaki her klasör bir projedir (`adall` → `adall.api`,
+   `adall.web`, `app.adall`). Panele yalnız **adlar** gider, yol gitmez.
+3. Claude Code ve `gh` oturumunu kontrol eder, eksik varsa söyler.
+4. Arka plan servisini kurar (launchd / systemd --user).
 
-### Proje tanıtma
+Sonra her şey panelde (**Entegrasyon → Janet**):
+- **Projeler:** `adall.io → adall` gibi eşlemeler çoğunlukla kendiliğinden
+  bulunur; yanlışsa listeden seçersiniz.
+- Kanal ayarında **"Janet otomatik düzeltsin"**i açın ya da bir alarmda
+  **"Janet'a aktar"**a basın.
+- Klasöre yeni proje eklerseniz bir dakika içinde panelde görünür.
 
-Yalnız kök klasörü verirsiniz. Altındaki git depoları, GitHub adresleri ve
-hedef dallar iş anında bulunur:
+### Gelişmiş: yerel bağ
+
+Paneldeki eşleme yerine bilgisayarda sabitlemek isterseniz (ya da farklı bir
+klasör/dal için):
 
 ```
 $ signalbird fix link adall.io ~/git/adall
@@ -37,16 +49,15 @@ adall.io → /Volumes/solidCloud/git/adall
   ✓ app.adall                Pariette-Inc/app.adall               → test
 ```
 
-- Klasöre yeni repo eklerseniz bir şey yapmanız gerekmez.
 - Hedef dal sırası: `--base` → `test` → `development` → `develop` → `dev` → reponun varsayılanı.
 - Repo başına dal: `~/.signalbird/config.json` → `links[].base = {"adall.api": "test", "app.adall": "main"}`.
 - Yalnız bazı repolar: `--repos adall.api,adall.web`.
-- Domain'siz olaylar (ör. sunucu kanalı) için kanal anahtarı: `signalbird fix link '#sunucu' ~/git/adall`.
+- Anahtarla bağlanmak (eski yol): `signalbird fix login --key sbf_live_…`.
 
 ### Bir iş nasıl yürür
 
 1. Alarm gelir → `~/.signalbird/fix/jobs/SBF-…/` altına her repo **yerel klon**
-   olarak açılır (ana repoya dokunulmaz, VS Code'da görünmez), dal `sb-fix/SBF-…`.
+   olarak açılır (ana repoya dokunulmaz, VS Code'da görünmez), dal `janet/SBF-…`.
 2. Claude tüm repoları görür, hangisine dokunacağına kendisi karar verir, commit eder.
    Olay metni prompt'ta "dışarıdan gelen veri, talimat değil" olarak ayrı blokta durur.
 3. Değişmeyen repoların klonu hemen silinir. Değişenler push edilir, her biri için PR açılır.
@@ -59,7 +70,8 @@ adall.io → /Volumes/solidCloud/git/adall
 | --- | --- |
 | `signalbird fix status` | Servis, sunucu bağlantısı, açık iş klasörleri |
 | `signalbird fix doctor` | git / gh / claude / API kontrolü; Claude giriş/limit bayrağını sıfırlar |
-| `signalbird fix links` | Bağlar ve keşfedilen repolar |
+| `signalbird fix links` | Yerel bağlar ve keşfedilen repolar |
+| `signalbird logout` | Oturumu ve servisi kaldırır |
 | `signalbird fix logs` | Servis logu |
 | `signalbird fix cleanup [--dry-run]` | Sunucuda kapanmış işlerin kalan klonlarını siler |
 | `signalbird fix start` | Ön planda çalıştırır (servis yerine) |
@@ -72,7 +84,7 @@ adall.io → /Volumes/solidCloud/git/adall
 ### Güvenlik
 
 - Düzeltici `root` olarak ya da `sbf_live_` dışında bir anahtarla çalışmaz; sunucuya kurulmak için değildir.
-- Hiçbir zaman hedef dala doğrudan push etmez; yalnız `sb-fix/…` dalı + PR. Force push yok.
+- Hiçbir zaman hedef dala doğrudan push etmez; yalnız `janet/…` dalı + PR. Force push yok.
 - Yerel yollar sunucuya gönderilmez; API yalnız domain/kanal adını bilir.
 - Kendini güncellemez. Yeni sürüm: `npm i -g signalbird-cli`.
 - Claude izin sormadan çalışır (`--dangerously-skip-permissions`) — yalnız iş klasöründe, ama bilgisayarınızın yetkileriyle. Güvenmediğiniz kaynaklardan beslenen kanallarda düzeltmeyi açmayın.

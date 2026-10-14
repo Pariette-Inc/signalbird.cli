@@ -1,7 +1,11 @@
 # signalbird.cli Protokolü
 
 > yazar: ahmet selim çil | ahmet@pariette.com
-> fix protokolü sürümü: 1 · sunucu ajanı protokolü: 1 (bkz. `docs/AGENT-PROTOCOL.md`)
+> fix protokolü sürümü: 2 · sunucu ajanı protokolü: 1 (bkz. `docs/AGENT-PROTOCOL.md`)
+>
+> **Protokol 2 (14 Eki 2026) §12'dedir ve çakışan her maddede öncekinin yerine geçer:**
+> düzelticinin adı **Janet**; makine hesapla (tarayıcı onayı) bağlanır ve kullanıcıya aittir;
+> domain → proje eşlemesi panelde yapılır.
 
 > 13 Eki 2026, Ahmet: "radio sistemimizde alert almış olan mesajlar çok önemli.
 > kod tarafında çözülmesi gerekebiliyor. o alert almış mesajları hemen masaüstü
@@ -39,8 +43,10 @@ Kurallar (tartışmaya kapalı):
 3. **Kendini güncelleme yok.** Yeni sürüm npm/brew ile gelir. Kendini
    güncelleyen ve Claude'u izinsiz çalıştıran bir ajan, uzaktan kod
    çalıştırmanın ta kendisidir.
-4. **Yerel yol sunucuya gitmez.** API yalnız domain / kanal adını bilir;
-   `~/git/adall` gibi yollar bilgisayarda kalır.
+4. **Yerel yol sunucuya gitmez.** API yalnız domain / kanal adını ve proje
+   kökünün altındaki klasör ve repo **adlarını** bilir (`adall`, `adall.api`);
+   `/Volumes/…/git/adall` gibi tam yollar bilgisayarda kalır. Ad gönderilir,
+   çünkü eşleme panelde yapılır (§12.3) — adı bilmeyen panel öneri sunamaz.
 5. **Yalnız PR.** Düzeltici hiçbir zaman hedef dala doğrudan push etmez.
 6. **Gizli bilgi prompt'a girmez.** Ajan yerel ortamını kullanır; API'den sır
    gelmez.
@@ -206,7 +212,7 @@ Takip denemesinde `branch` ve `prs` dolu gelir: CLI aynı dala devam eder.
 ```json
 {
   "status": "running" | "pr_open" | "no_change" | "failed",
-  "branch": "sb-fix/SBF-241013-7K2Q",
+  "branch": "janet/SBF-241013-7K2Q",
   "prs": [ { "repo": "Pariette-Inc/adall.api", "url": "https://github.com/…/pull/42", "number": 42, "base": "test" } ],
   "summary": "≤ 9000 karakter",
   "error": "≤ 4500 karakter"
@@ -312,20 +318,20 @@ worktree listesi.
 git clone <repo> <jobdir>/<repo>          # yerel yol → nesneler hardlink, anlık
 git -C <jobdir>/<repo> remote set-url origin <repo'nun gerçek origin'i>
 git -C <jobdir>/<repo> fetch origin <base>
-git -C <jobdir>/<repo> checkout -B sb-fix/<code> origin/<base>
+git -C <jobdir>/<repo> checkout -B janet/<code> origin/<base>
 ```
 Neden worktree değil: worktree ana repoya kayıt düşer, VS Code kaynak
 kontrolünde her iş ayrı repo olarak görünür ve ana repodaki dalı kilitler
 (SistemTakip v14 dersi). Klon ana repoya hiç iz bırakmaz; silmek klasörü
 silmektir. Takipte klon zaten durur ve aynı dalda devam edilir; yoksa
-`origin/sb-fix/<code>`'dan yeniden kurulur. Bağımlılıklar
+`origin/janet/<code>`'dan yeniden kurulur. Bağımlılıklar
 (`node_modules`, `vendor`) macOS'ta `cp -c` (APFS klon), diğerlerinde symlink.
 Claude'un çalışma dizini iş klasörüdür; tüm repoları görür, hangisine
 dokunacağına kendisi karar verir.
 
 Bittiğinde:
 - commit'i olmayan repo → klonu hemen silinir.
-- commit'i olan repo → `git push -u origin sb-fix/<code>` (force yok; uzak
+- commit'i olan repo → `git push -u origin janet/<code>` (force yok; uzak
   dal ilerlemişse önce rebase), PR yoksa `gh pr create`, varsa yalnız push.
 - Temizlik (`resolved|rejected|canceled`): iş klasörü silinir,
   `POST /cleaned`. Uzak dal silinmez (GitHub'ın "merge sonrası dalı sil"i
@@ -367,3 +373,111 @@ Komut: `claude -p --output-format stream-json --verbose --dangerously-skip-permi
 - `401`: dur. `403`: bekle. `409 JOB_CLOSED`: işi bırak, yerel durumu temizle.
 - Claude giriş / kota hatası: iş `failed`, `hello.agents.claude.status`
   `auth_required` / `rate_limited`; bu durumdayken makine iş almaz.
+
+---
+
+## 12. Protokol 2 — Janet, hesapla giriş, panelde proje eşleme (14 Eki 2026)
+
+> Ahmet: "her seferinde login mi yapıcaz? oturum açtığım mail hesabına bağlı
+> olarak giriş yapmak daha doğru olmaz mı?" · "makinemde hiç bir işlem yapmamız
+> gerekmeyecek dimi? … sadece signalbird tarafında 'bunu makineye çözdür' gibi
+> bir seçenek işaretlemem yeterli olacak" · "buradaki agentımızın ismi Janet
+> olacak … radio özelinde değil, her yerde çalışabilsin."
+
+### 12.1 Ad ve yer
+
+- Düzeltici ajanın ürün adı **Janet**. Panelde düğme **"Janet'a aktar"**, kanal
+  anahtarı **"Janet otomatik düzeltsin"**, PR açıklaması "Janet tarafından
+  açıldı". Kod adı (`fix`, `fix_jobs`, `signalbird fix`) değişmez.
+- Janet Telsiz'e özel değildir. Panel adresleri `/janet` (görevler) ve
+  `/janet/machines` (makineler); eski `/radio/fixes` ve `/radio/fixers`
+  yönlendirir. Üst menüde **Entegrasyon** altında da durur. Bugün iş kaynağı
+  yalnız Telsiz olayıdır; `fix_jobs.source` alanı (`radio`) ileride izleyici,
+  sohbet vb. kaynaklara açılır.
+
+### 12.2 Hesapla giriş (cihaz akışı)
+
+Bilgisayarda bir kez:
+
+```
+npm i -g signalbird-cli
+signalbird login            # tarayıcı açılır → "Bu bilgisayarı bağla"
+```
+
+1. `POST /api/v1/fix/device/start` (kimliksiz, `throttle:10,1` IP başına)
+   `{ "hostname": "ahmet-mbp", "platform": "darwin-arm64", "version": "0.2.0" }`
+   → `{ "device_code": "<40 karakter>", "user_code": "ABCD-2345",
+   "verify_url": "https://signalbird.io/tr/janet/connect?code=ABCD-2345",
+   "interval": 3, "expires_in": 600 }`.
+   `user_code` 8 karakter, karışmayan harf/rakam (0/O, 1/I yok). İkisi de
+   tek kullanımlık; yalnız sha256'ları saklanır (`fix_device_codes`).
+2. Panel `/janet/connect?code=` (oturum yoksa girişe gidip geri döner; kod elle
+   de yazılabilir): bilgisayar adı, platform, IP ve "bu sizin bilgisayarınız
+   değilse reddedin" gösterilir.
+   `POST /api/v1/panel/fix/device/approve { "user_code": "ABCD-2345" }` (Sanctum)
+   → makine **onaylayan kullanıcıya** açılır. `…/device/deny` reddeder.
+3. CLI `interval` saniyede bir `POST /api/v1/fix/device/token { "device_code" }`
+   - bekliyor: `428 AUTHORIZATION_PENDING`
+   - reddedildi: `403 ACCESS_DENIED`; süresi doldu: `410 EXPIRED_TOKEN`
+   - onaylandı (bir kez): `200 { "token": "sbf_live_…", "machine": { "id", "name" } }`
+4. Dönen anahtar yine `sbf_live_` (sha256 saklanır). §4'ün geri kalanı aynı;
+   `signalbird fix login --key` yedek olarak kalır.
+
+Aynı bilgisayardan tekrar `login` → aynı kullanıcı + aynı hostname'li makine
+varsa yenisi açılmaz, anahtarı döndürülür (eski anahtar ölür).
+
+### 12.3 Makine kullanıcıya aittir
+
+- `fix_machines.user_id` sahibi; `team_id` artık yalnız eski (anahtarla açılmış)
+  kayıtlarda dolu.
+- Makinenin alabileceği işler: sahibinin **claim anında** üyesi olduğu ve
+  `integrations` yetkisi olan takımların işleri. Takımdan çıkarılan kullanıcının
+  makinesi o takımın işini almaz (önbellek yok, her claim'de bakılır).
+- Takım ayarı **"Janet işleri üyelerin bilgisayarlarına gitsin"**
+  (`teams.janet_enabled`, varsayılan açık). Kapalıysa o takımın işleri hiçbir
+  kullanıcı makinesine gitmez.
+- Eski takım makineleri (team_id dolu, user_id boş) çalışmaya devam eder.
+
+### 12.4 Projeler ve eşleme
+
+hello'ya `projects` eklenir (`links` bir sürüm daha kabul edilir, yerel
+`fix link` hâlâ en öncelikli):
+
+```json
+{
+  "projects": [
+    { "name": "adall", "repos": ["adall.api", "adall.web", "app.adall"] },
+    { "name": "signalbird", "repos": ["signalbird.api", "signalbird.web", "…"] }
+  ],
+  "links": [ { "domain": "adall.io" } ]
+}
+```
+
+CLI `projects`'i ayardaki köklerden (`fix.roots`, `login` sırasında bulunur)
+her hello'da yeniden tarar: kökün altındaki her klasör ya bir git deposudur
+(tek repolu proje) ya da bir alt seviyesinde git depoları vardır.
+
+Eşleme önceliği (bir iş hangi makineye/projeye gider):
+1. **Panelde açık eşleme** — `fix_project_links (team_id, domain_id | channel_key,
+   machine_id, project)`; "adall.io → Ahmet MacBook / adall".
+2. **Makinedeki yerel bağ** — `fix link` ile `links`'te bildirilen domain/kanal.
+3. **Kendiliğinden** — domain'in ilk etiketi (`adall.io` → `adall`) bir proje
+   adına ya da bir repo adının başına eşitse. Sunucu hesaplar; panel
+   "eşleşti: adall" diye gösterir ve değiştirilebilir.
+
+Claim yanıtındaki işe `"project": "adall"` (1 ve 3) ya da `null` (2: CLI yerel
+bağdan çözer) eklenir. CLI `project` geldiyse `roots` altında o klasörü kullanır.
+
+Uygun makine/proje yoksa iş `queued` kalır ama panel bunu söyler:
+iş JSON'unda `"routing": { "state": "no_machine" | "no_project" | "ok",
+"machine": {…}|null, "project": "adall"|null }`.
+
+### 12.5 Panel uçları (eklenenler)
+
+| Uç | Ne yapar |
+| --- | --- |
+| `POST device/approve` `{user_code}` · `POST device/deny` · `GET device/{user_code}` | Cihaz onayı (sayfa bilgisi: hostname, platform, ip, expires_at) |
+| `GET machines` | Artık **benim** makinelerim (+ takımın eski makineleri), her birinde `projects` |
+| `GET projects` | Takımın domain'leri ve kanalları × makinelerimdeki projeler, önerilen ve kayıtlı eşleme |
+| `PUT projects` `{domain_id | channel_key, machine_id, project}` · `DELETE projects/{id}` | Açık eşleme |
+| `PATCH team-settings` `{janet_enabled}` | Takım anahtarı |

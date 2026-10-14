@@ -2,7 +2,7 @@
 //
 //   ~/.signalbird/fix/jobs/<code>/
 //     .signalbird-job.json      ← işaret: hangi iş, hangi repolar, hangi süreç
-//     adall.api/                ← yerel klon, dal sb-fix/<code>
+//     adall.api/                ← yerel klon, dal janet/<code>
 //     adall.web/
 //
 // Git worktree değil, yerel klon: ana repoya kayıt düşmez (VS Code'da
@@ -26,7 +26,7 @@ export function jobDir(workdir, code) {
 }
 
 export function branchFor(job) {
-  return job.branch || `sb-fix/${job.code}`;
+  return job.branch || `janet/${job.code}`;
 }
 
 export function readMarker(dir) {

@@ -2,8 +2,8 @@
 // hedef dallar iş anında keşfedilir (PROTOCOL.md §8). Yeni bir repo eklemek
 // için ayar gerekmez.
 
-import { readdirSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { isGitRepo, parseSlug, tryGit, tryRun } from './git.mjs';
 
 export const BASE_CANDIDATES = ['test', 'development', 'develop', 'dev'];
@@ -102,4 +102,88 @@ export function describeLink(link) {
       return { ...r, base: null, problem: err.message };
     }
   });
+}
+
+// ── Projeler (protokol 2, PROTOCOL.md §12.4) ─────────────────────────
+// Kökün altındaki her klasör bir projedir: ya kendisi git deposudur (tek
+// repolu proje) ya da bir alt seviyesinde git depoları vardır. Sunucuya
+// yalnız ADLAR gider; tam yol bilgisayarda kalır.
+
+const MAX_PROJECTS = 200;
+
+function isDir(p) {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** @returns {Array<{ name: string, root: string, path: string, repos: string[] }>} */
+export function discoverProjects(roots = []) {
+  const out = [];
+  const seen = new Set();
+  for (const root of roots) {
+    let entries = [];
+    try {
+      entries = readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of entries.sort((a, b) => a.localeCompare(b))) {
+      if (name.startsWith('.') || SKIP_DIRS.has(name) || seen.has(name) || name.includes('/')) continue;
+      const path = join(root, name);
+      if (!isDir(path)) continue;
+      let repos;
+      if (isGitRepo(path)) {
+        repos = [name];
+      } else {
+        try {
+          repos = readdirSync(path)
+            .filter((n) => !n.startsWith('.') && !SKIP_DIRS.has(n) && isDir(join(path, n)) && isGitRepo(join(path, n)))
+            .sort((a, b) => a.localeCompare(b));
+        } catch {
+          repos = [];
+        }
+      }
+      if (!repos.length) continue;
+      seen.add(name);
+      out.push({ name, root, path, repos });
+      if (out.length >= MAX_PROJECTS) return out;
+    }
+  }
+  return out;
+}
+
+/** Proje kökü adayları: içinde en az bir proje olan yaygın klasörler. */
+export function suggestRoots(cwd = process.cwd()) {
+  const home = process.env.HOME || '';
+  const candidates = [];
+
+  // Bir git deposunun içindeysek: depo kökünün iki üstü (…/git/adall/adall.api → …/git)
+  // ya da bir üstü (…/git/penyu → …/git).
+  const top = tryRun('git', ['rev-parse', '--show-toplevel'], { cwd });
+  if (top) {
+    const parent = join(top, '..');
+    const grand = join(top, '..', '..');
+    candidates.push(isGitRepo(parent) ? join(parent, '..') : grand, parent);
+  }
+  for (const d of ['git', 'code', 'Code', 'Projects', 'projects', 'src', 'Developer', 'dev', 'repos']) candidates.push(join(home, d));
+  try {
+    for (const v of readdirSync('/Volumes')) candidates.push(join('/Volumes', v, 'git'));
+  } catch {}
+
+  // ~/git çoğu zaman başka bir diske kısayoldur; gerçek yola göre tekilleştir.
+  const real = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const uniq = [...new Set(candidates.map(real))];
+  return uniq
+    .map((root) => ({ root, count: discoverProjects([root]).length }))
+    .filter((r) => r.count > 0)
+    .sort((a, b) => b.count - a.count);
 }
