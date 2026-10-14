@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { agentMain, AGENT_HELP } from './agent/index.mjs';
 import { ApiError } from './api.mjs';
 import { expandHome, loadConfig, parseTarget, saveConfig, sameTarget, targetLabel } from './config.mjs';
-import { claudeVersion } from './fix/agent.mjs';
+import { claudeVersion, probeClaude } from './fix/agent.mjs';
 import { describeLink, discoverProjects, suggestRoots } from './fix/discover.mjs';
 import { deviceLogin } from './fix/login.mjs';
 import { tryRun } from './fix/git.mjs';
@@ -30,7 +30,8 @@ Janet (geliştirici bilgisayarı) — Signalbird alarmını yerel Claude'a düze
   signalbird fix uninstall
   signalbird fix start                   Ön planda çalıştırır
   signalbird fix status                  Servis, bağlantı, açık iş klasörleri
-  signalbird fix doctor                  git / gh / claude / API kontrolü
+  signalbird fix doctor                  git / gh / claude (oturum dahil) / API kontrolü
+  signalbird fix claude-token [anahtar]  Claude'a uzun ömürlü anahtarla bağlanır (claude setup-token)
   signalbird fix cleanup [--dry-run] [--force]
                                          Sunucuda kapanmış işlerin yerel klonlarını siler
   signalbird fix logs [-n 100]           Servis logunun sonu
@@ -133,8 +134,14 @@ async function login(argv) {
   // 3) Gerekenler
   ui.step(3, total, 'Kontroller');
   const cv = claudeVersion(cfg);
-  if (cv) ui.ok(`Claude Code ${c.dim(cv.replace(/\s*\(Claude Code\)/, ''))}`);
-  else ui.fail('Claude Code bulunamadı', 'npm i -g @anthropic-ai/claude-code && claude');
+  if (!cv) ui.fail('Claude Code bulunamadı', 'npm i -g @anthropic-ai/claude-code && claude');
+  else {
+    const sp = ui.spinner('Claude deneniyor…');
+    const probe = probeClaude(cfg);
+    sp.stop();
+    if (probe.ok) ui.ok(`Claude Code ${c.dim(cv.replace(/\s*\(Claude Code\)/, ''))} · oturum açık`);
+    else ui.fail(`Claude Code ${cv.replace(/\s*\(Claude Code\)/, '')} · ${probe.failure === 'auth_required' ? 'oturum yok' : 'çalışmadı'}`, CLAUDE_FIX[probe.failure] || probe.detail);
+  }
   if (tryRun('gh', ['auth', 'status']) !== null) ui.ok('GitHub CLI oturumu açık');
   else ui.fail('GitHub CLI oturumu yok (PR açmak için gerekli)', 'brew install gh && gh auth login');
   ui.gap();
@@ -162,6 +169,54 @@ async function login(argv) {
     `${c.violet('→')} ya da bir alarmda "Janet'a aktar"`,
     c.dim(panel),
   ]);
+}
+
+const CLAUDE_FIX = {
+  auth_required: 'claude setup-token  →  çıkan anahtarla: signalbird fix claude-token',
+  rate_limited: 'Claude kullanım limiti dolmuş; sıfırlanınca tekrar: signalbird fix doctor',
+  not_installed: 'npm i -g @anthropic-ai/claude-code',
+};
+
+/**
+ * Janet'ın Claude'a uzun ömürlü anahtarla bağlanması. Terminal oturumu
+ * (claude /login) zamanla düşer ve arka plan servisi işleri "oturum yok"
+ * diye düşürür; `claude setup-token` ile alınan anahtar düşmez.
+ */
+async function fixClaudeToken(argv) {
+  const { positionals, values } = args(argv, { clear: { type: 'boolean' } });
+  const cfg = loadConfig();
+  cfg.fix.claude.env = { ...(cfg.fix.claude.env || {}) };
+  if (values.clear) {
+    delete cfg.fix.claude.env.CLAUDE_CODE_OAUTH_TOKEN;
+    saveConfig(cfg);
+    return out('✓ Anahtar kaldırıldı; Janet terminaldeki claude oturumunu kullanacak.');
+  }
+  let token = positionals[0];
+  if (!token) {
+    ui.line(c.dim('Anahtarı almak için başka bir terminalde: claude setup-token'));
+    token = await ask('Claude anahtarını yapıştırın (sk-ant-oat…)', '');
+  }
+  token = String(token || '').trim();
+  if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(token)) die('Bu bir Claude anahtarına benzemiyor (sk-ant-… bekleniyor). Almak için: claude setup-token');
+  cfg.fix.claude.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+  const sp = ui.spinner('Claude deneniyor…');
+  const probe = probeClaude(cfg);
+  sp.stop();
+  if (!probe.ok) die(`Anahtarla da çalışmadı: ${probe.detail}`);
+  saveConfig(cfg);
+  resetAgentState(cfg);
+  ui.ok('Claude anahtarı kaydedildi ve çalışıyor (~/.signalbird/config.json, yalnız sizin okuyabileceğiniz dosya).');
+  if (restart()) ui.ok('Servis yeniden başlatıldı; Janet görev almaya hazır.');
+}
+
+function resetAgentState(cfg) {
+  try {
+    const statePath = `${cfg.fix.workdir}/state.json`;
+    if (!existsSync(statePath)) return;
+    const st = JSON.parse(readFileSync(statePath, 'utf8'));
+    st.agent = { status: 'ready', until: null };
+    writeFileSync(statePath, JSON.stringify(st, null, 2));
+  } catch {}
 }
 
 async function logout() {
@@ -315,6 +370,8 @@ async function fixDoctor() {
   }
   const cv = claudeVersion(cfg);
   ok &= check('claude', Boolean(cv), cv || 'yok → npm i -g @anthropic-ai/claude-code');
+  const probe = cv ? probeClaude(cfg) : { ok: false, failure: 'not_installed' };
+  if (cv) ok &= check('claude oturumu', probe.ok, probe.ok ? 'çalışıyor' : CLAUDE_FIX[probe.failure] || probe.detail);
   ok &= check('root değil', !(process.getuid && process.getuid() === 0), '');
 
   try {
@@ -332,8 +389,8 @@ async function fixDoctor() {
     ok = check('API', false, err.message) && ok;
   }
 
-  // auth_required / rate_limited bayrağını sıfırla: kullanıcı sorunu giderdiğini söylüyor.
-  try {
+  // auth_required / rate_limited bayrağını sıfırla — yalnız Claude gerçekten çalışıyorsa.
+  if (probe.ok) try {
     const statePath = `${cfg.fix.workdir}/state.json`;
     if (existsSync(statePath)) {
       const st = JSON.parse(readFileSync(statePath, 'utf8'));
@@ -421,6 +478,8 @@ async function fix(argv) {
       return out('✓ Servis kaldırıldı. Ayar ve iş klasörleri duruyor.');
     case 'status':
       return fixStatus();
+    case 'claude-token':
+      return fixClaudeToken(rest);
     case 'doctor':
       return fixDoctor();
     case 'cleanup':
