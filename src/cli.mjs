@@ -11,6 +11,7 @@ import { assertFixAllowed, fixClient, FixRunner } from './fix/runner.mjs';
 import { install, logFile, restart, serviceStatus, uninstall } from './fix/service.mjs';
 import { listJobs, removeJob } from './fix/workspace.mjs';
 import { send } from './send.mjs';
+import { ask, c, ui } from './ui.mjs';
 import { FIX_PROTOCOL, VERSION } from './version.mjs';
 
 const HELP = `signalbird ${VERSION}
@@ -61,18 +62,6 @@ function args(argv, options) {
 
 // ── login (protokol 2, PROTOCOL.md §12.2) ───────────────────────────
 
-async function ask(question, def) {
-  if (!process.stdin.isTTY) return def;
-  const { createInterface } = await import('node:readline/promises');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const a = (await rl.question(`${question}${def ? ` [${def}]` : ''}: `)).trim();
-    return a || def;
-  } finally {
-    rl.close();
-  }
-}
-
 async function login(argv) {
   const { values } = args(argv, {
     api: { type: 'string' },
@@ -87,33 +76,48 @@ async function login(argv) {
 
   const cfg = loadConfig();
   if (values.api) cfg.api = values.api.replace(/\/+$/, '');
+  const total = values['no-service'] ? 3 : 4;
+  ui.title('Signalbird · Janet kurulumu');
 
-  // 1) Proje kökü — tarayıcı onayından ÖNCE sorulur: soru yarıda
+  // 1) Proje klasörü — tarayıcı onayından ÖNCE sorulur: soru yarıda
   // kesilirse bilgisayar bağlanmış ama projesiz kalıyordu (14 Eki).
+  ui.step(1, total, 'Proje klasörü');
   let roots = (values.root || []).map(expandHome);
   if (!roots.length && cfg.fix.roots.length) roots = cfg.fix.roots;
   if (!roots.length) {
     const s = suggestRoots();
     const def = s[0]?.root || expandHome('~/git');
-    roots = [expandHome(await ask('Projeleriniz hangi klasörde?', def))];
+    roots = [expandHome(await ask('Projeleriniz hangi klasörde? (Enter = önerileni kabul et)', def))];
   }
   for (const r of roots) if (!existsSync(r)) die(`Klasör yok: ${r}`);
   cfg.fix.roots = roots;
+  const projects = discoverProjects(roots);
+  if (projects.length) {
+    const names = projects.slice(0, 6).map((p) => p.name).join(', ') + (projects.length > 6 ? ` +${projects.length - 6}` : '');
+    ui.ok(`${c.bold(String(projects.length))} proje · ${c.dim(roots.join(', '))}`);
+    ui.line(c.dim(names));
+  } else {
+    ui.warn(`Bu klasörde git deposu olan proje yok: ${roots.join(', ')}`);
+    ui.line(c.dim('Değiştirmek için: signalbird login --root <klasör>'));
+  }
+  ui.gap();
+
   // 2) Hesapla bağlan
+  ui.step(2, total, 'Hesabınızla bağlanın');
+  let spin;
   const { token, machine } = await deviceLogin({
     api: cfg.api,
     onCode: ({ verify_url, user_code, opened }) => {
-      out(opened ? 'Tarayıcıda Signalbird açıldı. "Bu bilgisayarı bağla" deyin.' : 'Bu adresi tarayıcıda açın ve "Bu bilgisayarı bağla" deyin:');
-      out(`  ${verify_url}`);
-      out(`  Kod: ${user_code}`);
-      out('Onay bekleniyor…');
+      ui.line(opened ? 'Tarayıcı açıldı. Signalbird\'de "Bu bilgisayarı bağla" deyin.' : 'Bu adresi tarayıcıda açıp "Bu bilgisayarı bağla" deyin:');
+      ui.code('Kod', user_code);
+      ui.code('Adres', verify_url);
+      spin = ui.spinner('Onay bekleniyor…');
     },
-  });
+  }).finally(() => spin?.stop());
   cfg.fix.key = token;
   saveConfig(cfg);
-  out(`✓ Bağlandı: "${machine.name || 'bu bilgisayar'}" hesabınıza eklendi.`);
+  ui.ok(`Bağlandı: ${c.bold(machine.name || 'bu bilgisayar')}`);
 
-  const projects = discoverProjects(roots);
   // Panel projeleri hemen görsün (servisin ilk turunu beklemeden).
   try {
     await fixClient(cfg, { retry: false })('POST', '/v1/fix/hello', {
@@ -124,33 +128,40 @@ async function login(argv) {
       agents: { claude: { version: claudeVersion(cfg), status: 'ready' } },
     });
   } catch {}
-  out(`✓ ${projects.length} proje bulundu (${roots.join(', ')})${projects.length ? ': ' + projects.slice(0, 8).map((p) => p.name).join(', ') + (projects.length > 8 ? ', …' : '') : ''}`);
-  if (!projects.length) out('  Uyarı: bu klasörde git deposu olan proje yok. Değiştirmek için: signalbird login --root <klasör>');
+  ui.gap();
 
   // 3) Gerekenler
+  ui.step(3, total, 'Kontroller');
   const cv = claudeVersion(cfg);
-  if (!cv) out('✗ Claude Code bulunamadı → npm i -g @anthropic-ai/claude-code, sonra bir kez "claude" çalıştırıp giriş yapın.');
-  else out(`✓ Claude Code ${cv}`);
-  const ghOk = tryRun('gh', ['auth', 'status']) !== null;
-  out(ghOk ? '✓ GitHub CLI oturumu açık' : '✗ GitHub CLI oturumu yok → brew install gh && gh auth login (PR açmak için gerekli)');
+  if (cv) ui.ok(`Claude Code ${c.dim(cv.replace(/\s*\(Claude Code\)/, ''))}`);
+  else ui.fail('Claude Code bulunamadı', 'npm i -g @anthropic-ai/claude-code && claude');
+  if (tryRun('gh', ['auth', 'status']) !== null) ui.ok('GitHub CLI oturumu açık');
+  else ui.fail('GitHub CLI oturumu yok (PR açmak için gerekli)', 'brew install gh && gh auth login');
+  ui.gap();
 
   // 4) Servis
   if (!values['no-service']) {
+    ui.step(4, total, 'Arka plan servisi');
     try {
       if (serviceStatus().installed) {
         restart();
-        out('✓ Servis yeniden başlatıldı.');
+        ui.ok('Yeniden başlatıldı');
       } else {
         const r = install();
-        out(`✓ Servis kuruldu (${r.kind}); bilgisayar açıldığında kendiliğinden başlar. Log: signalbird fix logs`);
+        ui.ok(`Kuruldu ${c.dim(`(${r.kind})`)} · bilgisayar açılınca kendiliğinden başlar`);
       }
     } catch (err) {
-      out(`✗ Servis kurulamadı: ${err.message}. Ön planda çalıştırmak için: signalbird fix start`);
+      ui.fail(`Kurulamadı: ${err.message}`, 'signalbird fix start   (ön planda çalıştırır)');
     }
   }
 
-  out('\nHazır. Gerisi panelden: Janet → Projeler bölümünde domain\'lerinizi projelere eşleyin (çoğu kendiliğinden eşleşir),');
-  out('kanal ayarında "Janet otomatik düzeltsin"i açın ya da bir alarmda "Janet\'a aktar"a basın.');
+  const panel = cfg.api.replace(/\/api\/?$/, '').replace('://live.', '://') + '/tr/janet';
+  ui.done('Hazır. Gerisi panelden', [
+    `${c.violet('→')} Janet › Projeler: domain'leri onaylayın`,
+    `${c.violet('→')} Kanal ayarı: "Janet otomatik düzeltsin"`,
+    `${c.violet('→')} ya da bir alarmda "Janet'a aktar"`,
+    c.dim(panel),
+  ]);
 }
 
 async function logout() {
@@ -286,7 +297,7 @@ async function fixStatus() {
 }
 
 function check(label, ok, detail) {
-  out(`${ok ? '✓' : '✗'} ${label.padEnd(16)} ${detail || ''}`);
+  out(`  ${ok ? c.green('✓') : c.red('✗')} ${c.bold(label.padEnd(14))} ${ok ? c.dim(detail || '') : c.cyan(detail || '')}`);
   return ok;
 }
 
