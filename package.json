@@ -1,0 +1,32 @@
+{
+  "name": "signalbird-cli",
+  "version": "0.1.0",
+  "description": "Signalbird komut satırı: telsiz alarmlarını yerel AI ajanına düzelttirip PR açar, sunucu ölçümü gönderir.",
+  "type": "module",
+  "bin": {
+    "signalbird": "bin/signalbird.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "PROTOCOL.md",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pariette-Inc/signalbird.cli.git"
+  },
+  "author": "ahmet selim çil <ahmet@pariette.com>",
+  "license": "MIT"
+}
