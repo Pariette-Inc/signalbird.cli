@@ -9,6 +9,7 @@ import { deviceLogin } from './fix/login.mjs';
 import { tryRun } from './fix/git.mjs';
 import { assertFixAllowed, fixClient, FixRunner } from './fix/runner.mjs';
 import { install, logFile, restart, serviceStatus, uninstall } from './fix/service.mjs';
+import { lookup } from './fix/lookup.mjs';
 import { listJobs, removeJob } from './fix/workspace.mjs';
 import { send } from './send.mjs';
 import { ask, askSecret, c, ui } from './ui.mjs';
@@ -37,6 +38,8 @@ Janet (geliştirici bilgisayarı): Signalbird alarmını kendi ajanınıza (Clau
   signalbird fix cleanup [--dry-run] [--force]
                                          Sunucuda kapanmış işlerin yerel klonlarını siler
   signalbird fix logs [-n 100]           Servis logunun sonu
+  signalbird fix lookup [metin] --job <id> [--since 2h] [--until …] [--level error,critical] [--channel k] [--limit 20] [--json]
+                                         Janet'ın iş sırasında takımın Telsiz olaylarında araması
 
 Gönderici (her yer)
   signalbird send <seviye> <mesaj> --channel <kanal> [--key sb_secret_live_…] [--source x] [--context '{"a":1}']
@@ -531,6 +534,32 @@ function fixLogs(argv) {
   out(readFileSync(file, 'utf8').split('\n').slice(-n - 1).join('\n'));
 }
 
+async function fixLookup(argv) {
+  const { values, positionals } = args(argv, {
+    job: { type: 'string' },
+    since: { type: 'string' },
+    until: { type: 'string' },
+    level: { type: 'string' },
+    channel: { type: 'string' },
+    limit: { type: 'string' },
+    json: { type: 'boolean' },
+  });
+  const cfg = loadConfig();
+  assertFixAllowed(cfg);
+  await lookup({
+    api: fixClient(cfg),
+    jobId: values.job || process.env.SIGNALBIRD_FIX_JOB,
+    text: positionals.join(' ').trim() || undefined,
+    since: values.since,
+    until: values.until,
+    level: values.level,
+    channel: values.channel,
+    limit: values.limit ? Number(values.limit) : undefined,
+    json: values.json,
+    out,
+  });
+}
+
 async function fix(argv) {
   const [sub, ...rest] = argv;
   switch (sub) {
@@ -566,6 +595,8 @@ async function fix(argv) {
       return fixCleanup(rest);
     case 'logs':
       return fixLogs(rest);
+    case 'lookup':
+      return fixLookup(rest);
     default:
       out(HELP);
       if (sub) process.exitCode = 1;
