@@ -14,6 +14,7 @@ import { FIX_PROTOCOL, VERSION } from '../version.mjs';
 import { AGENTS, agentName, agentVersion, probeAgent, runAgent } from './agent.mjs';
 import { errText } from './git.mjs';
 import { discoverProjects, suggestRoots } from './discover.mjs';
+import { lookupCommand } from './lookup.mjs';
 import { buildPrompt, extractQuestion, extractSummary, prBody, prTitle } from './prompt.mjs';
 import { finalize, ghOpenPr, jobDir, listJobs, prepare, removeJob, writeMarker } from './workspace.mjs';
 
@@ -413,8 +414,10 @@ export class FixRunner {
       const result = await runAgent({
         cfg: this.cfg,
         cwd: ws.repos.length > 1 ? ws.dir : ws.repos[0].clone,
-        prompt: buildPrompt({ job, ws }),
+        prompt: buildPrompt({ job, ws, lookup: lookupCommand(job.id) }),
         model: null,
+        // §15: `fix lookup` işi buradan bulur (komut --job'u da taşır).
+        env: { SIGNALBIRD_FIX_JOB: job.id },
         timeoutMinutes: job.limits?.timeout_minutes || this.cfg.fix[agentName(this.cfg)]?.timeout_minutes || 60,
         cancelSignal: abort.signal,
         onLine: (l) => logs.line(l),

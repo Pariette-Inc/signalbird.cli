@@ -89,6 +89,7 @@ signalbird fix agent gemini --key AIza…
 | `signalbird fix uninstall` | Removes the service. |
 | `signalbird fix start` | Runs in the foreground instead of the service. |
 | `signalbird fix logs [-n 100]` | The end of the service log. |
+| `signalbird fix lookup [text] --job <id> [--since 2h] [--level error,critical]` | Janet's read-only search in the team's Radio events while a job runs (it calls this itself instead of asking you for logs). |
 | `signalbird fix cleanup [--dry-run] [--force]` | Deletes local clones of jobs that are already closed on the server. |
 | `signalbird fix login --key sbf_live_… [--api URL]` | Advanced: connects with a team key instead of your account. |
 

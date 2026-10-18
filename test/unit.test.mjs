@@ -98,5 +98,28 @@ test('protokol 3: SORU çıkarma ve prompt\'ta konuşma', async () => {
   assert.match(p, /## Bu görevdeki konuşma/);
   assert.match(p, /### Janet \(soru\)\ncontracts mı agreements mı\?/);
   assert.match(p, /### Müşteri \(Ahmet\)\ncontracts kullan/);
-  assert.match(p, /## Emin değilsen sor/);
+  assert.match(p, /## Ne zaman sorarsın/);
+  assert.doesNotMatch(p, /## İlgili olaylar/, 'eski API alanı göndermezse bölüm yok');
+  assert.doesNotMatch(p, /fix lookup/);
+  assert.equal(extractQuestion('SORU: a mı b mi?\nKONTROL EDİLEN: lookup x'), 'a mı b mi?');
+
+  const p3 = buildPrompt({ job: { ...job, conversation: [], related_events: [] }, ws, lookup: "'node' 'sb.mjs' fix lookup --job fix_1" });
+  assert.match(p3, /başka kayıt bulamadı/);
+  assert.match(p3, /'node' 'sb.mjs' fix lookup --job fix_1 "<request_id>"/);
+  assert.match(p3, /Tek istisna yukarıdaki Signalbird arama komutu/);
+  assert.match(p3, /KONTROL EDİLEN:/);
+});
+
+test('§15: lookup zaman ve biçim', async () => {
+  const { parseTime, formatEvent, lookupCommand } = await import('../src/fix/lookup.mjs');
+  const now = Date.parse('2026-10-18T20:00:00Z');
+  assert.equal(parseTime('2h', now), '2026-10-18T18:00:00.000Z');
+  assert.equal(parseTime('-30m', now), '2026-10-18T19:30:00.000Z');
+  assert.equal(parseTime('2026-10-18T10:00:00+03:00'), '2026-10-18T07:00:00.000Z');
+  assert.equal(parseTime(undefined), undefined);
+  assert.throws(() => parseTime('dün'), /anlaşılmadı/);
+
+  const f = formatEvent({ occurred_at: 't', level: 'error', channel: 'api', message: 'a\nb >>> c', context: { request_id: 'r' }, match: 'kimlik: r' });
+  assert.equal(f, "t · ERROR · #api · (kimlik: r)\n    a\n    b ›>> c\n    bağlam: {\"request_id\":\"r\"}");
+  assert.match(lookupCommand("fix_1"), /^'.+' '.+bin\/signalbird\.mjs' fix lookup --job fix_1$/);
 });

@@ -87,6 +87,7 @@ signalbird fix agent gemini --key AIza…
 | `signalbird fix uninstall` | Servisi kaldırır. |
 | `signalbird fix start` | Servis yerine ön planda çalıştırır. |
 | `signalbird fix logs [-n 100]` | Servis logunun sonu. |
+| `signalbird fix lookup [metin] --job <id> [--since 2h] [--level error,critical]` | Janet'ın iş sırasında takımın Telsiz olaylarında salt okunur araması (log istemek yerine kendisi çağırır). |
 | `signalbird fix cleanup [--dry-run] [--force]` | Sunucuda kapanmış görevlerin yerel klonlarını siler. |
 | `signalbird fix login --key sbf_live_… [--api URL]` | Gelişmiş: hesap yerine takım anahtarıyla bağlanır. |
 

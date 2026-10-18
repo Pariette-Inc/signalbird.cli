@@ -274,7 +274,7 @@ export function describeGeminiEvent(ev, st = {}) {
  * Seçili ajanı görev klasöründe çalıştırır.
  * @returns {Promise<{ ok: boolean, finalText: string, exitCode: number|null, timedOut: boolean, canceled: boolean, failure: string|null, tail: string }>}
  */
-export function runAgent({ cfg, name = agentName(cfg), cwd, prompt, model, onLine = () => {}, timeoutMinutes, cancelSignal }) {
+export function runAgent({ cfg, name = agentName(cfg), cwd, prompt, model, env = {}, onLine = () => {}, timeoutMinutes, cancelSignal }) {
   const bin = agentBin(cfg, name);
   if (!bin) {
     return Promise.resolve({ ok: false, finalText: '', exitCode: null, timedOut: false, canceled: false, failure: 'not_installed', tail: `${AGENTS[name].bin} bulunamadı` });
@@ -287,7 +287,7 @@ export function runAgent({ cfg, name = agentName(cfg), cwd, prompt, model, onLin
   const args = driver.args(c, model || c.model, st);
 
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd, env: agentEnv(cfg, name), stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, { cwd, env: { ...agentEnv(cfg, name), ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
 
     let tail = '';
     let buf = '';
