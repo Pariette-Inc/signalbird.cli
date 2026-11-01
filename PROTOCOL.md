@@ -736,8 +736,14 @@ her iş `wt-*` worktree'leri de repo sanıp 40'a kadar klon açıyordu (1,5 GB).
 
 `hello.open_prs: [{job_id, prs}]`: bu makinenin `pr_open` işlerindeki bitmemiş PR'lar.
 CLI 30 dk'da bir `gh pr view` ile okur, değişen `prs[].state`'i (`open|merged|closed`)
-`PATCH` eder; hepsi bittiyse `prs_done=true`. **İş kendiliğinden kapanmaz** (§3:
-"çözüldü" bilgisi müşteriden gelir); panel "birleşti" gösterir ve listeden toplu kapatılır.
+`PATCH` eder; hepsi bittiyse `prs_done=true`.
+
+**PR'lar bitti ve en az biri birleştiyse iş kendiliğinden çözülür** (1 Kas 2026, §3'teki
+"çözüldü bilgisi müşteriden gelir" kuralının yerine): `status=resolved`,
+`close_reason=PR_MERGED`, `resolved_by=null`, `cleanup_state=pending`; Janet `note` mesajı
+yazar. Hepsi birleşmeden kapandıysa iş `pr_open` kalır, karar kullanıcınındır. Yalnız
+`pr_open` işe uygulanır: takip denemesi sürerken birleşen PR işi kapatmaz. Hangi dala
+birleştiğine bakılmaz: `test`'e birleşen PR da işi çözer.
 
 ### 16.6 Liste yönetimi
 
