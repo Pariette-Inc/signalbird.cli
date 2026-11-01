@@ -673,13 +673,14 @@ aynı yoldan geçer.
 
 ### 16.1 Madde ve proje
 
-`source: "manual"` iş. Proje, takımın **Telsiz kullanan** projesidir: Telsiz
-anahtarı olan bir domain ya da domainsiz bir Telsiz kanalı
-(`GET /v1/panel/fix/task-projects`). Eşleme §12.4'teki FixRouting'tir.
+`source: "manual"` iş. Proje, takımın **Telsiz kullanan domainidir**: Telsiz kanalı,
+olayı ya da Janet işi olan domain (`GET /v1/panel/fix/task-projects`). Kanal proje
+değildir ve seçilmez; kanalın `domain_id`'si boş olabildiği için yalnız kanala
+bakılmaz. Eşleme §12.4'teki FixRouting'tir, domain üzerinden yapılır.
 
-`POST /v1/panel/fix/tasks {title, description?, domain_id | channel_key, target_base?}` → 201 `{job}`.
+`POST /v1/panel/fix/tasks {title, description?, domain_id, target_base?}` → 201 `{job}`.
 
-Maddede `event: null`, kanal seçilmediyse `channel: null`. Parmak izi maddeye
+Maddede `event: null` ve `channel: null`. Parmak izi maddeye
 özeldir, iki madde birleşmez. **Takım tavanı (§7) yalnız Telsiz işlerini sayar:**
 alarm seli maddeyi, maddeler alarmı kuyruktan etmesin.
 
