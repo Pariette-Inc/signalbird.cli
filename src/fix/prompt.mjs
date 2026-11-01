@@ -265,7 +265,7 @@ export function prBody({ job, summary, ws, repo }) {
       '',
       others.length ? `Aynı işte değişen diğer repolar: ${others.join(', ')}` : '',
       '',
-      'Bu PR, Signalbird\'ün yazılım ajanı **Janet** tarafından açıldı. Test edip panelde **Çözüldü** ya da **Reddet** deyin.',
+      'Bu PR, Signalbird\'ün yazılım ajanı **Janet** tarafından açıldı. PR birleşince madde kendiliğinden çözülür; birleştirmeyecekseniz panelde **Reddet** deyin.',
     ].join('\n');
   }
   return [
@@ -284,6 +284,6 @@ export function prBody({ job, summary, ws, repo }) {
     '',
     others.length ? `Aynı işte değişen diğer repolar: ${others.join(', ')}` : '',
     '',
-    'Bu PR, Signalbird\'ün düzeltme ajanı **Janet** tarafından açıldı. Test edip panelde **Çözüldü** ya da **Reddet** deyin; Janet\'ın yerel çalışma klasörü o anda silinir.',
+    'Bu PR, Signalbird\'ün düzeltme ajanı **Janet** tarafından açıldı. PR birleşince iş kendiliğinden çözülür; birleştirmeyecekseniz panelde **Reddet** deyin.',
   ].filter((l) => l !== null).join('\n');
 }
