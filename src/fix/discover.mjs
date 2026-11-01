@@ -10,6 +10,19 @@ export const BASE_CANDIDATES = ['test', 'development', 'develop', 'dev'];
 
 const SKIP_DIRS = new Set(['node_modules', 'vendor', '.git', 'dist', 'build']);
 
+/**
+ * Bağlı git worktree'si: `.git` klasör değil dosyadır. Bunlar ayrı bir repo
+ * değil, ana reponun başka bir dalıdır (`adall branch` ile açılan `wt-*`).
+ * Repo sayılırlarsa her işte hepsi klonlanır (1 Kas 2026: iş başına 40 klon).
+ */
+export function isLinkedWorktree(dir) {
+  try {
+    return statSync(join(dir, '.git')).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /** Kök bir git deposuysa kendisi; değilse bir alt seviyedeki git depoları. */
 export function discoverRepos(root, only = null) {
   let repos;
@@ -28,7 +41,7 @@ export function discoverRepos(root, only = null) {
       .map((n) => ({ name: n, path: join(root, n) }))
       .filter((r) => {
         try {
-          return statSync(r.path).isDirectory() && isGitRepo(r.path);
+          return statSync(r.path).isDirectory() && isGitRepo(r.path) && !isLinkedWorktree(r.path);
         } catch {
           return false;
         }
@@ -133,14 +146,14 @@ export function discoverProjects(roots = []) {
     for (const name of entries.sort((a, b) => a.localeCompare(b))) {
       if (name.startsWith('.') || SKIP_DIRS.has(name) || seen.has(name) || name.includes('/')) continue;
       const path = join(root, name);
-      if (!isDir(path)) continue;
+      if (!isDir(path) || isLinkedWorktree(path)) continue;
       let repos;
       if (isGitRepo(path)) {
         repos = [name];
       } else {
         try {
           repos = readdirSync(path)
-            .filter((n) => !n.startsWith('.') && !SKIP_DIRS.has(n) && isDir(join(path, n)) && isGitRepo(join(path, n)))
+            .filter((n) => !n.startsWith('.') && !SKIP_DIRS.has(n) && isDir(join(path, n)) && isGitRepo(join(path, n)) && !isLinkedWorktree(join(path, n)))
             .sort((a, b) => a.localeCompare(b));
         } catch {
           repos = [];

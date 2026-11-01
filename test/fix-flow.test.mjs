@@ -14,7 +14,7 @@ Object.assign(process.env, gitUrlRewriteEnv(base), { SIGNALBIRD_HOME: join(base,
 
 const { FixRunner } = await import('../src/fix/runner.mjs');
 const { prepare, finalize, removeJob, listJobs } = await import('../src/fix/workspace.mjs');
-const { discoverRepos } = await import('../src/fix/discover.mjs');
+const { discoverProjects, discoverRepos } = await import('../src/fix/discover.mjs');
 const { defaults } = await import('../src/config.mjs');
 
 const api = makeRepo(base, 'adall.api', { branches: ['main', 'test'] });
@@ -50,6 +50,7 @@ process.env.SB_TEST_PROMPT = join(base, 'prompt.txt');
 const calls = [];
 let jobQueue = [];
 let cleanupList = [];
+let openPrs = [];
 let server;
 let apiUrl;
 
@@ -80,7 +81,7 @@ before(async () => {
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(o));
       };
-      if (req.url === '/api/v1/fix/hello') return send({ ok: true, machine: { id: 1, name: 'test', team_id: 1 }, pending: jobQueue.length, cleanup: cleanupList.splice(0) });
+      if (req.url === '/api/v1/fix/hello') return send({ ok: true, machine: { id: 1, name: 'test', team_id: 1 }, pending: jobQueue.length, cleanup: cleanupList.splice(0), open_prs: openPrs });
       if (req.url === '/api/v1/fix/jobs/claim') return send({ ok: true, job: jobQueue.shift() || null });
       if (req.method === 'GET' && /^\/api\/v1\/fix\/jobs\/[^/]+\/events/.test(req.url)) {
         return send({
@@ -148,9 +149,9 @@ test('iş: claim → klon → claude → push → PR → çözüldü → silindi
   // PR yalnız değişen repo için; adall.web klonu hemen silinmiş olmalı.
   assert.equal(prs.length, 1);
   assert.match(prs[0].title, /^SBF-T1: app.txt düzeltildi/);
+  // Push'lanan klon da PR açılır açılmaz gider: takipte uzaktaki daldan kurulur.
   const jobdir = join(base, 'home', 'fix', 'jobs', 'SBF-T1');
-  assert.ok(existsSync(join(jobdir, 'adall.api')));
-  assert.ok(!existsSync(join(jobdir, 'adall.web')));
+  assert.ok(!existsSync(jobdir), 'pushlanan klon diskte kalmamalı');
 
   // Dal gerçekten "GitHub"a gitti ve düzeltmeyi taşıyor.
   assert.equal(sh(api.bare, 'show', 'janet/SBF-T1:app.txt'), 'fixed');
@@ -168,11 +169,10 @@ test('iş: claim → klon → claude → push → PR → çözüldü → silindi
   assert.equal(logs[0].body.seq, 1);
 
   // Müşteri "Çözüldü" dedi → sonraki hello temizlik listesi getirir.
-  cleanupList = [{ job_id: 'fix_01T1', state: 'resolved' }];
+  // Klasör çoktan gitti; yine de sunucuya "temizlendi" bildirilir.
+  cleanupList = [{ job_id: 'fix_01T1', code: 'SBF-T1', state: 'resolved' }];
   await runner.tick();
-  assert.ok(!existsSync(jobdir), 'iş klasörü silinmeli');
-  const cleaned = calls.find((c) => c.url === '/api/v1/fix/jobs/fix_01T1/cleaned');
-  assert.deepEqual(cleaned.body.removed, ['adall.api']);
+  assert.ok(calls.some((c) => c.url === '/api/v1/fix/jobs/fix_01T1/cleaned'));
 });
 
 test('takip: aynı dala devam eder, mevcut PR\'a push eder', async () => {
@@ -240,7 +240,7 @@ test('protokol 2: yerel bağ yok, sunucu projeyi seçer; hello projeleri bildiri
   const names = hello.body.projects.map((p) => p.name);
   assert.ok(names.includes('project'), names.join());
   assert.deepEqual(hello.body.projects.find((p) => p.name === 'project').repos, ['adall.api', 'adall.web']);
-  assert.equal(hello.body.protocol, 3);
+  assert.equal(hello.body.protocol, 4);
 
   const final = calls.filter((x) => x.method === 'PATCH' && x.url.endsWith('/fix_P2')).at(-1).body;
   assert.equal(final.status, 'pr_open', JSON.stringify(final));
@@ -360,4 +360,115 @@ let i=''; process.stdin.on('data',d=>i+=d); process.stdin.on('end',()=>{
   } finally {
     rmSync(process.env.SIGNALBIRD_CONFIG, { force: true });
   }
+});
+
+// ── Protokol 4 (§16): madde, hedef dal, temizlik ──
+
+function quietRunner(opts = {}) {
+  const runner = new FixRunner({ cfg: cfg(), openPr: ({ repo }) => ({ url: `https://github.com/${repo.slug}/pull/9`, number: 9 }), ...opts });
+  runner.reloadLinks = () => {};
+  return runner;
+}
+
+const TASK = {
+  ...JOB,
+  id: 'fix_task',
+  code: 'SBF-TASK',
+  source: 'manual',
+  title: 'Kupon alanı ekle',
+  description: 'Sepette kupon kodu girilebilsin.',
+  channel: null,
+  event: null,
+  target_base: 'main',
+};
+
+test('§16: madde talimat olarak gider, PR seçilen dala açılır', async () => {
+  const prs = [];
+  const runner = quietRunner({ openPr: ({ repo, title }) => { prs.push({ base: repo.base, title }); return { url: 'https://github.com/o/r/pull/1', number: 1 }; } });
+  jobQueue = [{ ...TASK }];
+  await runner.tick();
+
+  const prompt = readFileSync(process.env.SB_TEST_PROMPT, 'utf8');
+  assert.match(prompt, /Sepette kupon kodu girilebilsin/);
+  assert.doesNotMatch(prompt, /TELSIZ_OLAYI/);
+  assert.equal(prs[0].base, 'main'); // test dalı olsa da seçilen dal kazanır
+  assert.equal(prs[0].title, 'SBF-TASK: Kupon alanı ekle');
+});
+
+test('§16: seçilen dal hiçbir repoda yoksa başka dala düşmez, iş açıklamayla düşer', async () => {
+  const runner = quietRunner();
+  jobQueue = [{ ...TASK, id: 'fix_task2', code: 'SBF-TASK2', target_base: 'live' }];
+  await runner.tick();
+
+  const last = calls.filter((c) => c.method === 'PATCH' && c.url.includes('fix_task2')).at(-1).body;
+  assert.equal(last.status, 'failed');
+  assert.match(last.error, /"live" dalı/);
+});
+
+test('§16: hedef dal adı git seçeneği olamaz', () => {
+  const c = cfg();
+  assert.throws(() => prepare({ job: { ...TASK, code: 'SBF-TASK3', target_base: '--upload-pack=x' }, link: c.fix.links[0], workdir: c.fix.workdir }), /Geçersiz hedef dal/);
+});
+
+test('§16: bağlı git worktree repo sayılmaz, klonlanmaz', () => {
+  const wt = join(project, 'wt-api-baska-is');
+  sh(api.local, 'worktree', 'add', '-q', '-b', 'baska-is', wt);
+  try {
+    const names = discoverRepos(project).map((r) => r.name);
+    assert.ok(names.includes('adall.api'));
+    assert.ok(!names.includes('wt-api-baska-is'));
+    assert.ok(!discoverProjects([base]).some((p) => p.repos.includes('wt-api-baska-is')));
+  } finally {
+    sh(api.local, 'worktree', 'remove', '--force', wt);
+  }
+});
+
+test('§16: hello diskteki işleri bildirir, kapanan iş klasörü silinir, bitmiş iş korumalı silinir', async () => {
+  const c = cfg();
+  const closed = { ...JOB, id: 'fix_c1', code: 'SBF-C1' };
+  const failed = { ...JOB, id: 'fix_c2', code: 'SBF-C2' };
+  const dirty = { ...JOB, id: 'fix_c3', code: 'SBF-C3' };
+  for (const job of [closed, failed, dirty]) prepare({ job, link: c.fix.links[0], workdir: c.fix.workdir });
+  const dirtyClone = join(c.fix.workdir, 'jobs', 'SBF-C3', 'adall.api');
+  writeFileSync(join(dirtyClone, 'app.txt'), 'yarim\n');
+  // Çalışan iş süreci yok; hepsi işaretten bulunabilir olmalı.
+  writeFileSync(join(c.fix.workdir, 'jobs', 'not-a-dir'), 'x');
+
+  const runner = quietRunner();
+  cleanupList = [
+    { job_id: 'fix_c1', code: 'SBF-C1', state: 'canceled' },
+    { job_id: 'fix_c2', code: 'SBF-C2', state: 'failed' },
+    { job_id: 'fix_c3', code: 'SBF-C3', state: 'failed' },
+  ];
+  await runner.hello();
+
+  const hello = calls.filter((x) => x.url === '/api/v1/fix/hello').at(-1);
+  assert.ok(hello.body.local_jobs.includes('SBF-C1'));
+  assert.equal(hello.body.protocol, 4);
+  assert.ok(!existsSync(join(c.fix.workdir, 'jobs', 'SBF-C1')));
+  assert.ok(!existsSync(join(c.fix.workdir, 'jobs', 'SBF-C2')));
+  assert.ok(existsSync(dirtyClone), 'kaybolacak işi olan klon korunur');
+  assert.ok(calls.some((x) => x.url === '/api/v1/fix/jobs/fix_c1/cleaned'));
+  assert.ok(!calls.some((x) => x.url === '/api/v1/fix/jobs/fix_c2/cleaned'));
+  removeJob(c.fix.workdir, 'SBF-C3', { force: true });
+});
+
+test('§16: PR durumu bildirilir, değişmeyen PR için istek atılmaz', async () => {
+  const pr = { repo: 'o/r', url: 'https://github.com/o/r/pull/5', number: 5, base: 'test' };
+  const runner = quietRunner({ prState: () => 'merged' });
+  openPrs = [{ job_id: 'fix_pr', prs: [pr] }];
+  await runner.hello();
+  const patch = calls.filter((x) => x.method === 'PATCH' && x.url.endsWith('fix_pr')).at(-1);
+  assert.equal(patch.body.prs[0].state, 'merged');
+  assert.equal(patch.body.status, undefined);
+
+  // Sıklık sınırı: ikinci turda GitHub'a gidilmez.
+  const before = calls.length;
+  await runner.syncPrs(openPrs);
+  assert.equal(calls.length, before);
+
+  const idle = quietRunner({ prState: () => null });
+  await idle.syncPrs([{ job_id: 'fix_pr2', prs: [pr] }]);
+  assert.ok(!calls.some((x) => x.method === 'PATCH' && x.url.endsWith('fix_pr2')));
+  openPrs = [];
 });

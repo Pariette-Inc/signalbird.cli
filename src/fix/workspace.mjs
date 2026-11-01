@@ -25,6 +25,16 @@ export function jobDir(workdir, code) {
   return join(jobsRoot(workdir), code);
 }
 
+/**
+ * Panelden seçilen hedef dal (§16.2). Sunucu da denetler; burada yine bakılır
+ * çünkü değer git'e argüman olur ve `-` ile başlayan ad seçenek sayılırdı.
+ */
+function targetBase(job) {
+  const target = job.target_base || null;
+  if (target && !/^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,120}$/.test(target)) throw new Error(`Geçersiz hedef dal: ${target}`);
+  return target;
+}
+
 export function branchFor(job) {
   return job.branch || `janet/${job.code}`;
 }
@@ -91,6 +101,8 @@ function abortPending(dir) {
 export function prepare({ job, link, workdir, log = () => {} }) {
   const dir = jobDir(workdir, job.code);
   const branch = branchFor(job);
+  const target = targetBase(job);
+  const previous = readMarker(dir)?.repos || [];
   mkdirSync(dir, { recursive: true });
 
   const discovered = discoverRepos(link.root, link.repos);
@@ -109,9 +121,21 @@ export function prepare({ job, link, workdir, log = () => {} }) {
       continue;
     }
 
-    const base = chooseBase(remote, link.base, r.name);
+    // Hedef dalı seçildiyse başka dala düşülmez: "live" istendi, test'e PR
+    // açılmamalı. O dalı taşımayan repo bu işin dışında kalır.
+    if (target && !remote.heads.includes(target)) {
+      log(`${r.name}: "${target}" dalı yok, atlandı.`);
+      continue;
+    }
+
+    const base = target || chooseBase(remote, link.base, r.name);
     const clone = join(dir, r.name);
     const remoteHasBranch = remote.heads.includes(branch);
+
+    // Hedef dal değiştirilmiş ve iş dalı henüz pushlanmamış: klon eski dalın
+    // üstünde duruyor, yenisinden kurulur.
+    const was = previous.find((p) => p.name === r.name)?.base;
+    if (was && was !== base && !remoteHasBranch) removeDir(clone);
 
     if (existsSync(join(clone, '.git'))) {
       abortPending(clone);
@@ -143,7 +167,11 @@ export function prepare({ job, link, workdir, log = () => {} }) {
     repos.push({ name: r.name, path: r.path, clone, origin: r.origin, slug: r.slug, base });
   }
 
-  if (!repos.length) throw new Error('Çalışılabilecek repo kalmadı (origin/erişim sorunları yukarıda).');
+  if (!repos.length) {
+    throw new Error(target
+      ? `"${target}" dalı bu projedeki hiçbir repoda yok; hedef dalı değiştirip yeniden deneyin.`
+      : 'Çalışılabilecek repo kalmadı (origin/erişim sorunları yukarıda).');
+  }
 
   writeMarker(dir, {
     job_id: job.id,
@@ -245,6 +273,13 @@ export function ghOpenPr({ repo, branch, title, body }) {
   const url = run('gh', ['pr', 'create', '--repo', repo.slug, '--base', repo.base, '--head', branch, '--title', title, '--body-file', '-'], { cwd: repo.clone, input: body, timeout: 120000 });
   const m = url.match(/\/pull\/(\d+)/);
   return { url: url.split('\n').pop(), number: m ? Number(m[1]) : null };
+}
+
+/** PR'ın GitHub'daki durumu: open | merged | closed; okunamazsa null. */
+export function ghPrState(url) {
+  const out = tryRun('gh', ['pr', 'view', url, '--json', 'state', '--jq', '.state'], { timeout: 60000 });
+  const state = out ? out.trim().toLowerCase() : null;
+  return ['open', 'merged', 'closed'].includes(state) ? state : null;
 }
 
 /** Klonda kaybolabilecek iş var mı: commit edilmemiş değişiklik ya da pushlanmamış commit. */

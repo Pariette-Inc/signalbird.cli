@@ -662,3 +662,90 @@ metnindeki `<<<` / `>>>` bozulur, blok içeriden kapatılamaz.
 anahtarı kalıcı bir arama kapısı olmaz. Sunucuya ssh / veritabanı erişimi
 YOKTUR (sonraya bırakıldı): sunucuda olan hata zaten sunucu ajanı ya da SDK
 ile Signalbird'e düşer.
+
+---
+
+## 16. Maddeler, hedef dal, liste yönetimi, temizlik (protokol 4, CLI 0.6.0, 1 Kas 2026)
+
+Janet artık yalnız alarm almaz; takım üyesi panelden iş verir. Aynı `fix_jobs`
+satırıdır, ayrı bir görev sistemi yoktur: konuşma, makine seçimi, PR ve temizlik
+aynı yoldan geçer.
+
+### 16.1 Madde ve proje
+
+`source: "manual"` iş. Proje, takımın **Telsiz kullanan** projesidir: Telsiz
+anahtarı olan bir domain ya da domainsiz bir Telsiz kanalı
+(`GET /v1/panel/fix/task-projects`). Eşleme §12.4'teki FixRouting'tir.
+
+`POST /v1/panel/fix/tasks {title, description?, domain_id | channel_key, target_base?}` → 201 `{job}`.
+
+Maddede `event: null`, kanal seçilmediyse `channel: null`. Parmak izi maddeye
+özeldir, iki madde birleşmez. **Takım tavanı (§7) yalnız Telsiz işlerini sayar:**
+alarm seli maddeyi, maddeler alarmı kuyruktan etmesin.
+
+### 16.2 Hedef dal
+
+`target_base`: PR'ın hedef dalı (`test`, `live`…); `null` = eskisi gibi CLI seçer
+(§8). Yalnız PR açılır; hedef dala doğrudan push yoktur (§1). Dal seçildiyse:
+
+- Janet o daldan başlar, PR o dala açılır.
+- O dalı taşımayan repo işin dışında kalır; hiçbirinde yoksa iş `failed` olur ve
+  sebebi yazar. **Başka dala düşülmez**: "live" istendiyse test'e PR açılmaz.
+
+`PATCH /v1/panel/fix/jobs/{id} {title?, description?, target_base?}`: başlık ve
+açıklama yalnız kuyruktaki maddede (409 `TASK_LOCKED`); hedef dal Janet'ın elinde
+olmayan, PR'ı olmayan açık işte (409 `TARGET_LOCKED`). Telsiz işinde de geçerlidir.
+
+Claim yanıtına `title`, `description`, `target_base` eklendi. Elle açılan maddede
+`related_events` yoktur; prompt `buildTaskPrompt`'tur ve metin alarm gibi
+güvenilmeyen veri değil, takım üyesinin talimatıdır.
+
+**Eski CLI kapısı:** madde ve hedef dallı iş yalnız `protocol ≥ 4` makineye verilir;
+eskisi alanları yok sayıp yanlış dala PR açardı. Yalnız eski makineler eşleşiyorsa
+`routing.state = "cli_outdated"` döner.
+
+### 16.3 Cevapsız soru
+
+`needs_input` işe `config('fix.question_timeout_hours')` (12) saat içinde cevap
+gelmezse `fix:sweep` işi kapatır: `status=canceled`, `close_reason=NO_ANSWER`,
+`resolved_by=null`, `cleanup_state=pending`; Janet `note` mesajı yazar ve açana +
+makine sahibine `janet.closed` bildirimi gider. Süre sorunun yazıldığı andan
+(`finished_at`) sayılır; panel `question_expires_at` ile kalan süreyi gösterir.
+Cevap işi kuyruğa aldığı için `needs_input`'ta kalan her iş cevapsızdır. Not
+(`run:false`) süreyi uzatmaz.
+
+### 16.4 Temizlik
+
+1 Kas 2026 teşhisi: temizlik "unutulmuyordu", hiç tetiklenmiyordu. Temizlik yalnız
+müşteri kapatınca isteniyordu ve `pr_open` işler aylarca açık kalıyordu; üstelik
+her iş `wt-*` worktree'leri de repo sanıp 40'a kadar klon açıyordu (1,5 GB). Üç düzeltme:
+
+- **Bağlı worktree repo değildir** (`isLinkedWorktree`: `.git` dosyadır). Ne
+  klonlanır ne proje sayılır.
+- **Pushlanan klon hemen silinir**: PR açılıp sorun kalmadıysa klonun değeri yok,
+  takipte `origin/janet/<code>`dan yeniden kurulur (§9 "Bittiğinde" bunu genişletir).
+- **Rutin mutabakat**: `hello.local_jobs` diskteki kodları (≤200) taşır; sunucu
+  bunlardan `TERMINAL` olanları `cleanup` listesine ekler (makine işi almamış
+  olabilir, takım kapsamına bakılır). `resolved|rejected|canceled` zorla silinir ve
+  `POST /cleaned` çağrılır; `failed|no_change` yalnız kaybolacak iş yoksa silinir,
+  sunucuya bildirilmez. Kullanıcının kendi `wt-*` worktree'lerine dokunulmaz.
+
+`hello.cleanup` satırları artık `code` da taşır.
+
+### 16.5 PR durumu
+
+`hello.open_prs: [{job_id, prs}]`: bu makinenin `pr_open` işlerindeki bitmemiş PR'lar.
+CLI 30 dk'da bir `gh pr view` ile okur, değişen `prs[].state`'i (`open|merged|closed`)
+`PATCH` eder; hepsi bittiyse `prs_done=true`. **İş kendiliğinden kapanmaz** (§3:
+"çözüldü" bilgisi müşteriden gelir); panel "birleşti" gösterir ve listeden toplu kapatılır.
+
+### 16.6 Liste yönetimi
+
+`GET /v1/panel/fix/jobs`: `source`, `domain`, `q`, `prs_done` süzgeçleri; zarfta
+`counts` (durum başına adet, `status` süzgecinden etkilenmez). Satırda `title`,
+`description`, `awaiting` (`user|janet|null`), `question`, `question_expires_at`,
+`target_base`, `prs_done`, `close_reason`, `requested_by`, `last_message.excerpt`.
+
+`POST /v1/panel/fix/jobs/bulk {ids[≤100], action: resolve|reject|cancel|retry, note?}`
+→ `{done: [id], failed: [{id, code}]}`. Her iş ayrı denenir, biri kapanmışsa diğerleri
+yine işlenir. Satırdan cevap için `POST /jobs/{id}/messages` (§13.3) kullanılır.

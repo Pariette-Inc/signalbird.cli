@@ -16,7 +16,7 @@ import { errText } from './git.mjs';
 import { discoverProjects, suggestRoots } from './discover.mjs';
 import { lookupCommand } from './lookup.mjs';
 import { buildPrompt, extractQuestion, extractSummary, prBody, prTitle } from './prompt.mjs';
-import { finalize, ghOpenPr, jobDir, listJobs, prepare, removeJob, writeMarker } from './workspace.mjs';
+import { finalize, ghOpenPr, ghPrState, jobDir, listJobs, prepare, removeJob, writeMarker } from './workspace.mjs';
 
 const TICK_MS = 60000;
 const CANCEL_POLL_MS = 45000;
@@ -24,6 +24,9 @@ const LOG_FLUSH_MS = 3000;
 const LOG_CHUNK_MAX = 15000;
 const LIMIT_COOLDOWN_MS = 30 * 60000;
 const LOCAL_SWEEP_DAYS = 30;
+const PR_SYNC_MS = 30 * 60000;
+const CLOSED_STATES = ['resolved', 'rejected', 'canceled'];
+const LOCAL_JOBS_MAX = 200;
 
 export function assertFixAllowed(cfg) {
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
@@ -115,9 +118,12 @@ function createLogUploader(api, job) {
 // ── düzeltici ───────────────────────────────────────────────────────
 
 export class FixRunner {
-  constructor({ cfg, openPr = ghOpenPr }) {
+  constructor({ cfg, openPr = ghOpenPr, prState = ghPrState }) {
     this.cfg = cfg;
     this.openPr = openPr;
+    this.prState = prState;
+    this.keptWarned = new Set();
+    this.lastPrSync = 0;
     this.api = fixClient(cfg);
     this.state = loadState(cfg);
     this.busy = false;
@@ -222,6 +228,8 @@ export class FixRunner {
       // Yalnız seçili ajan bildirilir; panel adını buradan okur.
       agents: { [name]: { version, status } },
       busy_job_id: this.current?.job.id || null,
+      // §16.4: diskte duran iş klasörleri. Sunucu bitmiş olanları `cleanup`'a ekler.
+      local_jobs: listJobs(this.cfg.fix.workdir).map((j) => j.code).slice(0, LOCAL_JOBS_MAX),
     });
 
     if (res.release?.is_outdated) {
@@ -229,29 +237,63 @@ export class FixRunner {
     }
 
     for (const c of res.cleanup || []) await this.cleanupJob(c);
+    await this.syncPrs(res.open_prs || []);
     if (res.socket?.url && res.socket?.channel) this.connectSocket(res.socket).catch((e) => warn(`socket: ${e.message}`));
 
     return res;
   }
 
+  /**
+   * Kapatılan iş klasörü silinir. Kapanmamış ama bitmiş iş (`failed`,
+   * `no_change`) yalnız kaybolacak bir şey yoksa silinir ve sunucuya
+   * bildirilmez: yeniden denenirse klon uzaktan kurulur.
+   */
   async cleanupJob({ job_id, code, state }) {
     // Sunucu kodu göndermezse iş klasöründeki işaretten bulunur.
     const entry = listJobs(this.cfg.fix.workdir).find((j) => (code && j.code === code) || j.marker?.job_id === job_id);
     if (this.current?.job.id === job_id) return; // çalışan iş: önce durdurulur, sonra temizlenir
+    const closed = CLOSED_STATES.includes(state);
     let removed = [];
     if (entry) {
-      const res = removeJob(this.cfg.fix.workdir, entry.code, { force: state !== 'failed' });
+      const res = removeJob(this.cfg.fix.workdir, entry.code, { force: closed });
       removed = res.removed;
       if (res.kept.length) {
-        warn(`${entry.code}: bazı klonlar korunuyor → ${res.kept.map((k) => `${k.name} (${k.reasons.join(', ')})`).join('; ')}`);
+        // Her turda tekrar gelir; günlüğü doldurmasın.
+        if (!this.keptWarned.has(entry.code)) {
+          this.keptWarned.add(entry.code);
+          warn(`${entry.code}: bazı klonlar korunuyor → ${res.kept.map((k) => `${k.name} (${k.reasons.join(', ')})`).join('; ')}`);
+        }
         return;
       }
       log(`${entry.code}: iş ${state} → yerel klonlar silindi (${removed.join(', ') || 'boş'}).`);
     }
+    if (!closed) return;
     try {
       await this.api('POST', `/v1/fix/jobs/${job_id}/cleaned`, { removed });
     } catch (err) {
       warn(`temizlik bildirilemedi (${job_id}): ${err.message}`);
+    }
+  }
+
+  /**
+   * §16.5: açık PR'ların GitHub'daki durumu. Panel "birleşti" diye gösterir;
+   * iş kendiliğinden kapanmaz, "çözüldü" bilgisi kullanıcıdan gelir (§3).
+   */
+  async syncPrs(openPrs) {
+    if (!openPrs.length || Date.now() - this.lastPrSync < PR_SYNC_MS) return;
+    this.lastPrSync = Date.now();
+    for (const { job_id, prs } of openPrs) {
+      if (this.current?.job.id === job_id) continue;
+      const next = prs.map((pr) => {
+        const state = pr.state === 'merged' || pr.state === 'closed' ? pr.state : this.prState(pr.url);
+        return state ? { ...pr, state } : pr;
+      });
+      if (next.every((pr, i) => pr.state === prs[i].state)) continue;
+      try {
+        await this.api('PATCH', `/v1/fix/jobs/${job_id}`, { prs: next });
+      } catch (err) {
+        warn(`PR durumu bildirilemedi (${job_id}): ${err.message}`);
+      }
     }
   }
 
@@ -388,7 +430,7 @@ export class FixRunner {
     const logs = createLogUploader(this.api, job);
     const started = Date.now();
 
-    log(`▶ ${job.code} (${targetLabel(job.domain ? { domain: job.domain } : { channel: job.channel?.key })}, deneme ${job.attempt}) ${String(job.event?.message || '').split('\n')[0].slice(0, 120)}`);
+    log(`▶ ${job.code} (${targetLabel(job.domain ? { domain: job.domain } : { channel: job.channel?.key })}, deneme ${job.attempt}) ${String(job.title || job.event?.message || '').split('\n')[0].slice(0, 120)}`);
 
     let cancelTimer;
     try {
@@ -482,6 +524,9 @@ export class FixRunner {
           error: fin.problems.length ? fin.problems.join('\n').slice(0, 4500) : null,
         });
         log(`✓ ${job.code}: ${fin.prs.length} PR (${mins} dk) ${fin.prs.map((p) => p.url).join(' ')}`);
+        // Her şey uzakta: klon artık gereksiz, takipte `janet/<code>`dan yeniden
+        // kurulur. Kapanmayı beklerse iş başına bir klon günlerce diskte kalıyordu.
+        if (!fin.problems.length) removeJob(this.cfg.fix.workdir, job.code);
       } else if (fin.problems.length) {
         writeMarker(ws.dir, { status: 'failed' });
         await this.report(job.id, { status: 'failed', summary, error: fin.problems.join('\n').slice(0, 4500) });

@@ -4,4 +4,4 @@ export const VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ).version;
 
-export const FIX_PROTOCOL = 3;
+export const FIX_PROTOCOL = 4;
