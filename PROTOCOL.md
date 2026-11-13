@@ -795,6 +795,11 @@ satırı kalmamış bir makineye sabit iş de sabit sayılmaz.
 | `null` | sabitlenmez, Janet seçer |
 | alan yok | takımın varsayılanı |
 
+**Bilgisayarı yalnız yetkili seçer** (`team.manage`: sahip, yönetici). Yetkisiz üye
+yalnız kendi bilgisayarını gösterebilir (başkasınınki 422); onun `null`'u
+"varsayılan" sayılır, iş yine kendi bilgisayarına gider. Aynı kural §17.4'teki
+değiştirmede geçerlidir. `task-projects` zarfında `can_pick_machine`.
+
 Varsayılan `teams.janet_manual_target`: `requester` (ilk değer) ise madde, açanın
 o projeyi yapabilen **tek** bilgisayarına sabitlenir; hiç yoksa ya da birden çoksa
 tahmin edilmez, sabitlenmez. `auto` ise hiç sabitlenmez. "Yapabilen" = projeyi
@@ -822,3 +827,15 @@ yalnız gönderilen alan değişir. `GET projects` ikisini de döner.
 elinde olmayan her açık işte. `claimed|running` işte 409 `MACHINE_LOCKED`. PR'ı
 olan iş de taşınabilir; takip denemesi dalı uzaktan alır. Panel iş JSON'unda
 `target_machine: {id, name, online} | null`.
+
+### 17.5 Bekleyen madde: "Janet çözsün"
+
+`POST /v1/panel/fix/tasks` isteğe bağlı `janet` (boolean) alır. `false` ise madde
+açılır ama Janet'a verilmez: `fix_jobs.held = true`, durum `queued` kalır, hiçbir
+makine almaz (`claim` ve `hello.pending` görmez), hedef bilgisayar yazılmaz. Ayrı
+durum yoktur; panel JSON'unda `held: true` ve `awaiting: "user"`. Alan yoksa `true`.
+
+`PATCH /v1/panel/fix/jobs/{id} {janet: true}` maddeyi Janet'a verir. Hedef
+seçilmediyse **verenin** bilgisayarına gider (§17.2 kuralı). `{janet: false}`
+kuyruktaki maddeyi yeniden bekletir. İkisi de yalnız kuyruktaki elle maddede;
+Telsiz işinde ya da Janet aldıktan sonra 409 `TASK_LOCKED`.
