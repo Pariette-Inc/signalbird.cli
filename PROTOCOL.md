@@ -756,3 +756,88 @@ birleştiğine bakılmaz: `test`'e birleşen PR da işi çözer.
 `POST /v1/panel/fix/jobs/bulk {ids[≤100], action: resolve|reject|cancel|retry, note?}`
 → `{done: [id], failed: [{id, code}]}`. Her iş ayrı denenir, biri kapanmışsa diğerleri
 yine işlenir. Satırdan cevap için `POST /jobs/{id}/messages` (§13.3) kullanılır.
+
+---
+
+## 17. Hedef bilgisayar (13 Kas 2026)
+
+> Ahmet: "birden fazla bilgisayar varsa janet nerde çalışacak seçilemiyor …
+> radio üzerinden gelen acil durum maddelerinin X bilgisayarında çalışması,
+> manuel açılan maddenin şu kullanıcının bilgisayarında yapılması gibi
+> seçenekler olmalı."
+
+Aynı proje birden çok bilgisayarda varsa işi eskiden ilk claim eden alırdı.
+Artık iş bir bilgisayara yönlendirilebilir. **Protokol sürümü ve CLI değişmez:**
+karar sunucudadır (`FixRouting`), CLI yine yalnız claim yanıtındaki `project`'e bakar.
+
+### 17.1 Sabit iş
+
+`fix_jobs.target_machine_id`: iş yalnız o makinede yapılır. `machine_id` değildir;
+o, işi alan makinedir (temizlik, sahiplik, takip sırası). Sabit işte:
+
+- makine takımın işlerini alamıyorsa (pasif, sahibi takımdan çıktı) `routing.state`
+  `no_machine`; projeyi bulamıyorsa `no_project`. `routing.machine` o makinedir.
+- makine çevrimdışıysa iş **bekler**; başka makineye düşmez.
+- proje yalnız o makinede aranır: açık eşlemenin proje adı (makinede varsa) →
+  makinenin yerel bağı → domain etiketiyle kendiliğinden eşleşme (§12.4).
+- §12.4'teki açık eşleme başka makineyi gösterse de sabit makine kazanır.
+
+Makine silinince ona sabit işler serbest kalır (`target_machine_id = null`);
+satırı kalmamış bir makineye sabit iş de sabit sayılmaz.
+
+### 17.2 Elle madde: açanın bilgisayarı
+
+`POST /v1/panel/fix/tasks` isteğe bağlı `target_machine_id` alır:
+
+| İstek | Sonuç |
+| --- | --- |
+| sayı | o makine (takımın işlerini alabilmeli, yoksa 422) |
+| `null` | sabitlenmez, Janet seçer |
+| alan yok | takımın varsayılanı |
+
+**Bilgisayarı yalnız yetkili seçer** (`team.manage`: sahip, yönetici). Yetkisiz üye
+yalnız kendi bilgisayarını gösterebilir (başkasınınki 422); onun `null`'u
+"varsayılan" sayılır, iş yine kendi bilgisayarına gider. Aynı kural §17.4'teki
+değiştirmede geçerlidir. `task-projects` zarfında `can_pick_machine`.
+Yetkisiz üyenin maddesi başkasının bilgisayarına düşmez: birden çok bilgisayarı
+varsa çevrimiçi olana sabitlenir; hiç yoksa madde bekler (§17.5).
+
+Varsayılan `teams.janet_manual_target`: `requester` (ilk değer) ise madde, açanın
+o projeyi yapabilen **tek** bilgisayarına sabitlenir; hiç yoksa ya da birden çoksa
+tahmin edilmez, sabitlenmez. `auto` ise hiç sabitlenmez. "Yapabilen" = projeyi
+bulan ve `protocol ≥ 4` olan makine. Bu varsayılan §12.4'teki açık eşlemenin
+makinesinden önce gelir (eşlemenin proje adı yine kullanılır).
+
+`GET /v1/panel/fix/task-projects` her projede `machine_ids` (yapabilen makineler)
+ve `default_machine_id` (şimdi açarsam varsayılan) döner; zarfta `machines`
+(`id`, `name`, `owner`, `mine`, `online`).
+
+### 17.3 Telsiz: takımın varsayılan bilgisayarı
+
+`teams.janet_radio_machine_id`. İşe yazılmaz, her eşlemede okunur: ayar değişince
+kuyruktaki iş de yön değiştirir. Telsiz işinin adayları arasında bu makine varsa
+yalnız o kalır. Makinede proje yoksa iş diğer adaylara düşer. Açık eşleme (§12.4)
+daha dardır ve varsayılanı ezer. Olaydan elle açılan iş de (`…/events/{id}/fix`)
+Telsiz işidir ve bu varsayılana uyar.
+
+`PATCH /v1/panel/fix/team-settings {janet_enabled?, radio_machine_id?, manual_target?}`:
+yalnız gönderilen alan değişir. `GET projects` ikisini de döner.
+
+### 17.4 Hedefi değiştirme
+
+`PATCH /v1/panel/fix/jobs/{id} {target_machine_id}` (sayı ya da `null`): Janet'ın
+elinde olmayan her açık işte. `claimed|running` işte 409 `MACHINE_LOCKED`. PR'ı
+olan iş de taşınabilir; takip denemesi dalı uzaktan alır. Panel iş JSON'unda
+`target_machine: {id, name, online} | null`.
+
+### 17.5 Bekleyen madde: "Janet çözsün"
+
+`POST /v1/panel/fix/tasks` isteğe bağlı `janet` (boolean) alır. `false` ise madde
+açılır ama Janet'a verilmez: `fix_jobs.held = true`, durum `queued` kalır, hiçbir
+makine almaz (`claim` ve `hello.pending` görmez), hedef bilgisayar yazılmaz. Ayrı
+durum yoktur; panel JSON'unda `held: true` ve `awaiting: "user"`. Alan yoksa `true`.
+
+`PATCH /v1/panel/fix/jobs/{id} {janet: true}` maddeyi Janet'a verir. Hedef
+seçilmediyse **verenin** bilgisayarına gider (§17.2 kuralı). `{janet: false}`
+kuyruktaki maddeyi yeniden bekletir. İkisi de yalnız kuyruktaki elle maddede;
+Telsiz işinde ya da Janet aldıktan sonra 409 `TASK_LOCKED`.
