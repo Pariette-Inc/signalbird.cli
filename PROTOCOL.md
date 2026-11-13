@@ -799,6 +799,8 @@ satırı kalmamış bir makineye sabit iş de sabit sayılmaz.
 yalnız kendi bilgisayarını gösterebilir (başkasınınki 422); onun `null`'u
 "varsayılan" sayılır, iş yine kendi bilgisayarına gider. Aynı kural §17.4'teki
 değiştirmede geçerlidir. `task-projects` zarfında `can_pick_machine`.
+Yetkisiz üyenin maddesi başkasının bilgisayarına düşmez: birden çok bilgisayarı
+varsa çevrimiçi olana sabitlenir; hiç yoksa madde bekler (§17.5).
 
 Varsayılan `teams.janet_manual_target`: `requester` (ilk değer) ise madde, açanın
 o projeyi yapabilen **tek** bilgisayarına sabitlenir; hiç yoksa ya da birden çoksa
