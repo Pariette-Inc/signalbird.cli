@@ -11,7 +11,7 @@ import { ApiError, createClient } from '../api.mjs';
 import { findLink, loadConfig, saveConfig, targetLabel } from '../config.mjs';
 import { log, redact, warn } from '../log.mjs';
 import { FIX_PROTOCOL, VERSION } from '../version.mjs';
-import { AGENTS, agentName, agentVersion, probeAgent, runAgent } from './agent.mjs';
+import { AGENT_NAMES, AGENTS, agentName, agentVersion, agentVersions, probeAgent, runAgent } from './agent.mjs';
 import { errText } from './git.mjs';
 import { discoverProjects, suggestRoots } from './discover.mjs';
 import { lookupCommand } from './lookup.mjs';
@@ -23,6 +23,10 @@ const CANCEL_POLL_MS = 45000;
 const LOG_FLUSH_MS = 3000;
 const LOG_CHUNK_MAX = 15000;
 const LIMIT_COOLDOWN_MS = 30 * 60000;
+const AUTH_REPROBE_MS = 10 * 60000;
+// Sürüm her hello'da üç ikiliyi çalıştırmasın; sonradan kurulan ajan yine
+// yeniden başlatmadan görünsün.
+const VERSION_TTL_MS = 10 * 60000;
 const LOCAL_SWEEP_DAYS = 30;
 const PR_SYNC_MS = 30 * 60000;
 const CLOSED_STATES = ['resolved', 'rejected', 'canceled'];
@@ -54,17 +58,58 @@ function statePath(cfg) {
   return join(cfg.fix.workdir, 'state.json');
 }
 
-function loadState(cfg) {
+export function loadState(cfg) {
+  let st;
   try {
-    return JSON.parse(readFileSync(statePath(cfg), 'utf8'));
+    st = JSON.parse(readFileSync(statePath(cfg), 'utf8'));
   } catch {
-    return { pending: [], agent: { status: 'ready', until: null }, last_sweep: null };
+    st = { pending: [], last_sweep: null };
   }
+  st.pending ||= [];
+  if (!st.agents || typeof st.agents !== 'object') {
+    st.agents = {};
+    // ≤0.6.x makine başına tek durum tutuyordu; o durum o günkü seçili ajanındı.
+    // not_installed saklanmaz: sürüm her hello'da yeniden okunur.
+    const old = st.agent;
+    if (old?.status === 'auth_required' || old?.status === 'rate_limited') {
+      st.agents[agentName(cfg)] = { status: old.status, until: old.until ?? null };
+    }
+  }
+  delete st.agent;
+  return st;
 }
 
-function saveState(cfg, state) {
+export function saveState(cfg, state) {
   mkdirSync(cfg.fix.workdir, { recursive: true });
   writeFileSync(statePath(cfg), JSON.stringify(state, null, 2));
+}
+
+/** Kayıtlı durum (deneme yapmadan); limiti dolmuş soğuma `ready` sayılır. */
+export function storedAgentStatus(state, name) {
+  const a = state?.agents?.[name];
+  if (!a || !['auth_required', 'rate_limited'].includes(a.status)) return { status: 'ready', until: null };
+  if (a.status === 'rate_limited' && a.until && Date.now() > Date.parse(a.until)) return { status: 'ready', until: null };
+  return { status: a.status, until: a.status === 'rate_limited' ? a.until ?? null : null };
+}
+
+/**
+ * hello'nun ajan alanları (§18): `agent` = yerel varsayılan, `agents` = kurulu
+ * TÜM ajanlar. Yerel varsayılan kurulu değilse yine `not_installed` olarak
+ * listelenir; kurulu olmayan diğerleri listelenmez.
+ */
+export function helloAgents(cfg, state, versions = agentVersions(cfg)) {
+  const local = agentName(cfg);
+  const agents = {};
+  for (const n of AGENT_NAMES) {
+    const version = versions[n] || null;
+    if (!version) {
+      if (n === local) agents[n] = { version: null, status: 'not_installed' };
+      continue;
+    }
+    const s = storedAgentStatus(state, n);
+    agents[n] = { version, status: s.status, ...(s.until ? { until: s.until } : {}) };
+  }
+  return { agent: local, agents };
 }
 
 // ── canlı log ───────────────────────────────────────────────────────
@@ -132,46 +177,64 @@ export class FixRunner {
     this.stopping = false;
     this.socket = null;
     this.socketChannel = null;
+    this.lastProbe = {}; // ajan → son oturum denetimi
+    this.agentCache = null; // { key, at, versions }
+    this.agentsDirty = false; // bir ajanın durumu değişti, sunucu henüz bilmiyor
+    this.agentSelect = false; // API panelden ajan seçimini biliyor mu (§18)
   }
 
-  agentStatus() {
-    const a = this.state.agent || { status: 'ready' };
+  /** Durum ajan başınadır (§18): biri limitteyken diğeri iş almaya devam eder. */
+  agentStatus(name = agentName(this.cfg)) {
+    const a = this.state.agents[name] || { status: 'ready' };
     // Oturum düşmüştü: kullanıcı ajanına yeniden giriş yaptıysa 10 dakikada
-    // bir denenir, çalışıyorsa Janet işe kendisi döner.
-    if (a.status === 'auth_required' && Date.now() - (this.lastProbe || 0) > 10 * 60000) {
-      this.lastProbe = Date.now();
-      try {
-        const fresh = loadConfig().fix;
-        for (const k of ['agent', 'claude', 'codex', 'gemini']) this.cfg.fix[k] = fresh[k];
-      } catch {}
-      if (probeAgent(this.cfg).ok) {
-        log(`${AGENTS[agentName(this.cfg)].label} oturumu geri geldi; Janet görev almaya devam ediyor.`);
-        this.setAgentStatus('ready');
-        return 'ready';
+    // bir denenir, çalışıyorsa Janet o ajanla işe kendisi döner.
+    if (a.status === 'auth_required' && Date.now() - (this.lastProbe[name] || 0) > AUTH_REPROBE_MS) {
+      this.lastProbe[name] = Date.now();
+      if (probeAgent(this.cfg, name).ok) {
+        log(`${AGENTS[name].label} oturumu geri geldi; Janet bu ajanla görev almaya devam ediyor.`);
+        this.setAgentStatus(name, 'ready');
       }
     }
-    if (a.status === 'rate_limited' && a.until && Date.now() > Date.parse(a.until)) {
-      this.state.agent = { status: 'ready', until: null };
-      saveState(this.cfg, this.state);
-    }
-    return this.state.agent?.status || 'ready';
+    if (a.status === 'rate_limited' && a.until && Date.now() > Date.parse(a.until)) this.setAgentStatus(name, 'ready');
+    return storedAgentStatus(this.state, name).status;
   }
 
-  setAgentStatus(status) {
-    this.state.agent = {
+  setAgentStatus(name, status) {
+    const prev = storedAgentStatus(this.state, name).status;
+    this.state.agents[name] = {
       status,
       until: status === 'rate_limited' ? new Date(Date.now() + LIMIT_COOLDOWN_MS).toISOString() : null,
     };
+    if (prev !== status) this.agentsDirty = true;
     saveState(this.cfg, this.state);
   }
 
-  // Ayar dosyası ve proje kökü her turda yeniden okunur: `fix link` ya da
-  // klasöre yeni bir proje eklemek yeniden başlatma gerektirmez.
+  /** Kurulu ajanların sürümü (önbellekli; ayar değişince ya da 10 dk'da bir tazelenir). */
+  agentVersions() {
+    const key = JSON.stringify([agentName(this.cfg), ...AGENT_NAMES.map((n) => this.cfg.fix[n]?.bin || null)]);
+    const c = this.agentCache;
+    if (!c || c.key !== key || Date.now() - c.at > VERSION_TTL_MS) {
+      this.agentCache = { key, at: Date.now(), versions: agentVersions(this.cfg) };
+    }
+    return this.agentCache.versions;
+  }
+
+  /** Claim edilebilir mi: en az bir kurulu ajan `ready` (eski API'de yalnız yerel ajan). */
+  canClaim() {
+    const v = this.agentVersions();
+    // Eski API `job.agent` göndermez; iş hep yerel ajana gider, ona bakılır.
+    const names = this.agentSelect ? AGENT_NAMES : [agentName(this.cfg)];
+    return names.some((n) => v[n] && this.agentStatus(n) === 'ready');
+  }
+
+  // Ayar dosyası ve proje kökü her turda yeniden okunur: `fix link`, `fix
+  // agent` ya da klasöre yeni bir proje eklemek yeniden başlatma gerektirmez.
   reloadLinks() {
     try {
       const fresh = loadConfig().fix;
       this.cfg.fix.links = fresh.links;
       this.cfg.fix.roots = fresh.roots;
+      for (const k of ['agent', ...AGENT_NAMES]) this.cfg.fix[k] = fresh[k];
     } catch (err) {
       warn(err.message);
     }
@@ -213,10 +276,11 @@ export class FixRunner {
 
   async hello() {
     this.reloadLinks();
-    const name = agentName(this.cfg);
-    if (this.agentCache?.name !== name) this.agentCache = { name, version: agentVersion(this.cfg, name) };
-    const version = this.agentCache.version;
-    const status = version ? this.agentStatus() : 'not_installed';
+    const versions = this.agentVersions();
+    // Önce süresi dolan limit / geri gelen oturum işlenir, sonra bildirilir.
+    for (const n of AGENT_NAMES) if (versions[n]) this.agentStatus(n);
+    const { agent, agents } = helloAgents(this.cfg, this.state, versions);
+    this.agentsDirty = false;
     const res = await this.api('POST', '/v1/fix/hello', {
       hostname: os.hostname(),
       platform: `${os.platform()}-${os.arch()}`,
@@ -225,12 +289,24 @@ export class FixRunner {
       links: this.cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
       // Kök bilinmiyorsa alan hiç gönderilmez: sunucudaki son liste silinmesin.
       projects: (this.cfg.fix.roots || []).length ? (this.projects || []).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
-      // Yalnız seçili ajan bildirilir; panel adını buradan okur.
-      agents: { [name]: { version, status } },
+      // §18: yerel varsayılan + kurulu tüm ajanlar; sunucu işi ajanı hazır olana verir.
+      agent,
+      agents,
       busy_job_id: this.current?.job.id || null,
       // §16.4: diskte duran iş klasörleri. Sunucu bitmiş olanları `cleanup`'a ekler.
       local_jobs: listJobs(this.cfg.fix.workdir).map((j) => j.code).slice(0, LOCAL_JOBS_MAX),
     });
+
+    // Panel seçimi yalnız gösterilir (`fix status`); yerel `fix.agent` değişmez.
+    // Alanı hiç taşımayan yanıt = eski API, ajan seçimi yok.
+    const m = res.machine || {};
+    this.agentSelect = Object.hasOwn(m, 'default_agent');
+    const panel = this.agentSelect ? m.default_agent ?? null : null;
+    if (this.state.default_agent !== panel || this.state.agent_select !== this.agentSelect) {
+      this.state.default_agent = panel;
+      this.state.agent_select = this.agentSelect;
+      saveState(this.cfg, this.state);
+    }
 
     if (res.release?.is_outdated) {
       warn(`Yeni sürüm var: ${res.release.version} (kurulu ${VERSION}). Güncellemek için: npm i -g signalbird-cli`);
@@ -398,14 +474,17 @@ export class FixRunner {
       await this.flushPending();
       this.localSweep();
 
-      if (this.agentStatus() !== 'ready') return;
+      if (!this.canClaim()) return;
       if (!this.cfg.fix.links.length && !(this.projects || []).length) return;
 
       for (;;) {
         const res = await this.api('POST', '/v1/fix/jobs/claim');
         if (!res.job) break;
         await this.processJob(res.job);
-        if (this.stopping || this.agentStatus() !== 'ready') break;
+        if (this.stopping) break;
+        // Bir ajanın durumu değiştiyse sunucu bayat durumla iş vermesin (§18).
+        if (this.agentsDirty) await this.hello();
+        if (!this.canClaim()) break;
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -423,6 +502,43 @@ export class FixRunner {
     }
   }
 
+  /**
+   * İşin ajanı (§18): `job.agent` doluysa o (panel/eşleme seçimi), yoksa yerel
+   * `fix.agent`. Ajan çalışamıyorsa iş BAŞKA ajana verilmez: hata fırlatılır,
+   * iş `failed` olur.
+   */
+  pickAgent(job) {
+    const wanted = job.agent;
+    if (wanted != null && wanted !== '' && !AGENTS[wanted]) {
+      throw new Error(`Panelde seçilen ajan "${wanted}" bu CLI sürümünde tanınmıyor (desteklenen: ${AGENT_NAMES.join(', ')}). İş başka ajanla çalıştırılmadı; CLI'ı güncelleyin (npm i -g signalbird-cli) ya da panelden başka ajan seçip yeniden deneyin.`);
+    }
+    const name = wanted || agentName(this.cfg);
+    const why = wanted ? 'panel seçimi' : 'bu bilgisayardaki seçim (fix.agent)';
+    const a = AGENTS[name];
+    let version = this.agentVersions()[name];
+    if (!version) {
+      // Önbellek bayat olabilir: ajan son tazelemeden sonra kurulmuş olabilir.
+      version = agentVersion(this.cfg, name);
+      this.agentCache = null;
+      if (version) this.agentsDirty = true;
+    }
+    const rest = `İş başka ajanla çalıştırılmadı.`;
+    if (!version) {
+      this.agentsDirty = true;
+      throw new Error(`${a.label} bu bilgisayarda kurulu değil (${why}). Kurmak için: ${a.install}. ${rest}`);
+    }
+    const status = this.agentStatus(name);
+    if (status === 'auth_required') {
+      throw new Error(`${a.label} oturumu düşmüş (${why}). Bilgisayarda: ${a.login}. ${rest} Oturum gelince panelden "Yeniden dene" deyin.`);
+    }
+    if (status === 'rate_limited') {
+      const until = storedAgentStatus(this.state, name).until;
+      const end = until ? `, bitiş ${new Date(until).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}` : '';
+      throw new Error(`${a.label} kullanım limitinde (${why}${end}). ${rest}`);
+    }
+    return { name, version, why };
+  }
+
   async processJob(job) {
     const link = this.resolveLink(job);
     const abort = new AbortController();
@@ -434,6 +550,11 @@ export class FixRunner {
 
     let cancelTimer;
     try {
+      const agent = this.pickAgent(job);
+      const a = AGENTS[agent.name];
+      const timeout = job.limits?.timeout_minutes || this.cfg.fix[agent.name]?.timeout_minutes || 60;
+      logs.line(`● ajan: ${a.label} ${agent.version} · ${agent.why}`);
+
       if (!link) {
         throw new Error(job.project
           ? `"${job.project}" projesi bu bilgisayarda bulunamadı (proje kökü: ${(this.cfg.fix.roots || []).join(', ') || 'yok'}).`
@@ -455,12 +576,13 @@ export class FixRunner {
 
       const result = await runAgent({
         cfg: this.cfg,
+        name: agent.name,
         cwd: ws.repos.length > 1 ? ws.dir : ws.repos[0].clone,
         prompt: buildPrompt({ job, ws, lookup: lookupCommand(job.id) }),
         model: null,
         // §15: `fix lookup` işi buradan bulur (komut --job'u da taşır).
         env: { SIGNALBIRD_FIX_JOB: job.id },
-        timeoutMinutes: job.limits?.timeout_minutes || this.cfg.fix[agentName(this.cfg)]?.timeout_minutes || 60,
+        timeoutMinutes: timeout,
         cancelSignal: abort.signal,
         onLine: (l) => logs.line(l),
       });
@@ -475,16 +597,18 @@ export class FixRunner {
       }
 
       if (!result.ok) {
-        if (result.failure === 'auth_required' || result.failure === 'rate_limited' || result.failure === 'not_installed') {
-          this.setAgentStatus(result.failure);
+        if (result.failure === 'auth_required' || result.failure === 'rate_limited') this.setAgentStatus(agent.name, result.failure);
+        if (result.failure === 'not_installed') {
+          // Kurulu değil durumu saklanmaz; sürüm yeniden okunur, sunucu öğrenir.
+          this.agentCache = null;
+          this.agentsDirty = true;
         }
-        const a = AGENTS[agentName(this.cfg)];
         const why = result.timedOut
-          ? `Zaman aşımı (${job.limits?.timeout_minutes || 60} dk).`
+          ? `Zaman aşımı (${timeout} dk).`
           : result.failure === 'auth_required'
             ? `${a.label} oturumu düşmüş. Bilgisayarda: ${a.login}. Janet oturum gelince kendisi devam eder; bu görevi panelden "Yeniden dene" ile tekrar kuyruğa alın.`
             : result.failure === 'rate_limited'
-              ? `${a.label} kullanım limiti doldu; makine 30 dk iş almayacak.`
+              ? `${a.label} kullanım limiti doldu; bu ajan 30 dk iş almayacak (kurulu diğer ajanlar çalışmaya devam eder).`
               : result.failure === 'not_installed'
                 ? `${a.label} bu bilgisayarda bulunamadı: ${a.install}`
                 : `${a.label} hata ile bitti (çıkış ${result.exitCode}).`;

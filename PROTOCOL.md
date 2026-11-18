@@ -1,7 +1,7 @@
 # signalbird.cli Protokolü
 
 > yazar: ahmet selim çil | ahmet@pariette.com
-> fix protokolü sürümü: 3 · sunucu ajanı protokolü: 1 (bkz. `docs/AGENT-PROTOCOL.md`)
+> fix protokolü sürümü: 4 · sunucu ajanı protokolü: 1 (bkz. `docs/AGENT-PROTOCOL.md`)
 >
 > **Protokol 2 (14 Eki 2026) §12'dedir ve çakışan her maddede öncekinin yerine geçer:**
 > düzelticinin adı **Janet**; makine hesapla (tarayıcı onayı) bağlanır ve kullanıcıya aittir;
@@ -150,6 +150,9 @@ Her 60 sn ve başlangıçta. Bağlantı tazeler, temizlik listesini alır.
 (`domains.host`), `channel` = kanal anahtarı (domain'siz olaylar için, örn.
 sunucu ajanının `sunucu` kanalı). Yol **gönderilmez**.
 
+CLI 0.7.0'dan beri `agent` (yerel varsayılan) alanı eklenir ve `agents` kurulu
+TÜM ajanları taşır; yanıtta `machine.default_agent` döner. Bkz. §18.3.
+
 Yanıt:
 ```json
 {
@@ -205,6 +208,9 @@ Takip denemesinde `branch` ve `prs` dolu gelir: CLI aynı dala devam eder.
 
 18 Eki 2026'dan beri yanıt `job.related_events` dizisini de taşır (§15). Eski
 API göndermez; CLI o zaman prompt'a bölümü hiç yazmaz.
+
+18 Kas 2026'dan beri yanıt `job.agent` taşır (`claude|codex|gemini|null`): işin
+çalışacağı ajan. Sunucu işi yalnız o ajanı `ready` olan makineye verir. Bkz. §18.4.
 
 ### 5.3 `GET /jobs/{id}`
 
@@ -407,7 +413,8 @@ Komut: `claude -p --output-format stream-json --verbose --dangerously-skip-permi
   `state.json`'a yazılır, sonraki turda tekrar.
 - `401`: dur. `403`: bekle. `409 JOB_CLOSED`: işi bırak, yerel durumu temizle.
 - Ajan giriş / kota hatası: iş `failed`, `hello.agents.<ajan>.status`
-  `auth_required` / `rate_limited`; bu durumdayken makine iş almaz (§14).
+  `auth_required` / `rate_limited`; bu durumdayken makine **o ajanın** işini
+  almaz, diğer kurulu ajanlarınki sürer (§18.5; önceki kural §14).
 
 ---
 
@@ -609,6 +616,11 @@ genişler:
 - API, `agents` içindeki herhangi bir ajan `auth_required` / `rate_limited`
   ise makineye iş vermez (`FixMachine::agentBlocked`). Panel ajan adını
   anahtardan okur.
+
+> **CLI 0.7.0 (18 Kas 2026) ile değişti, §18'e bak:** `agents` artık kurulu
+> TÜM ajanları taşır, seçili ajan ayrı `agent` alanındadır; engel ajan
+> başınadır. Yukarıdaki "herhangi bir ajan engelliyse makineye iş vermez"
+> kuralı yalnız `agent` göndermeyen eski CLI'lara kalır.
 
 Çalıştırma (hepsinde prompt stdin'den, görev klasöründe, izin sormadan):
 
@@ -841,3 +853,126 @@ durum yoktur; panel JSON'unda `held: true` ve `awaiting: "user"`. Alan yoksa `tr
 seçilmediyse **verenin** bilgisayarına gider (§17.2 kuralı). `{janet: false}`
 kuyruktaki maddeyi yeniden bekletir. İkisi de yalnız kuyruktaki elle maddede;
 Telsiz işinde ya da Janet aldıktan sonra 409 `TASK_LOCKED`.
+
+---
+
+## 18. Panelden ajan seçimi (CLI 0.7.0, 18 Kas 2026)
+
+Janet'ın ajanı eskiden yalnız bilgisayarda (`fix agent`) seçiliyordu ve makine
+başına tek durum vardı: aynı bilgisayarda Claude da Codex de kurulu olsa biri
+limitteyken makine hiç iş almıyordu. Ajan artık panelden de seçilir: bilgisayarın varsayılanı ya da tek bir eşleme
+(proje) için. Bilgisayardaki `fix.agent` yerel varsayılan olarak kalır; panel
+seçimi onu **değiştirmez**, yalnız önüne geçer.
+
+### 18.1 Protokol numarası artmaz (4 kalır)
+
+Numara yalnız sunucunun işi eski CLI'dan **sakınması** gerektiğinde artar
+(§16.2 "eski CLI kapısı"); alan eklemek ya da anlam genişletmek artırmaz (§14,
+§15, §17). Burada kapı zaten `hello.agents` içeriğinden doğar: sunucu işi yalnız
+"etkin ajan o makinenin `agents` haritasında VE `ready`" ise verir. Eski CLI
+(≤0.6.x) yalnız kendi seçili ajanını bildirir, dolayısıyla ona yalnız zaten
+çalıştıracağı ajanın işi gider. Yetenek alanla anlaşılır: `hello.agent` gönderen
+makine ajan seçimini destekler.
+
+### 18.2 Öncelik (etkin ajan)
+
+1. Eşlemenin ajanı (`fix_project_links.agent`): **yalnız** iş o eşlemenin
+   makinesinde çalışıyorsa (eşleme yoluyla, `link.machine_id = makine.id`). İş
+   başka bilgisayara sabitlenmişse (§17) eşlemenin ajanı uygulanmaz; o
+   bilgisayarın varsayılanı geçerlidir (orada o ajan olmayabilir).
+2. Panelde seçilen makine varsayılanı (`fix_machines.default_agent`).
+3. Makinedeki yerel `fix.agent` (sunucuda `fix_machines.local_agent`; eski
+   CLI'da `agents` haritasının tek anahtarı).
+
+1 ya da 2 doluysa claim yanıtında `job.agent` o addır, yoksa `null`. Geçerli
+adlar `claude`, `codex`, `gemini` (API'de tek sabit liste).
+
+### 18.3 hello
+
+```json
+{
+  "agent": "codex",
+  "agents": {
+    "claude": { "version": "2.1.3 (Claude Code)", "status": "ready" },
+    "codex":  { "version": "codex-cli 0.159.0", "status": "rate_limited", "until": "2026-11-18T14:30:00Z" }
+  }
+}
+```
+- `agent`: yerel varsayılan (`fix.agent`). Sunucu `local_agent`'a yazar; alan
+  yoksa `NULL`'a çeker (CLI düşürüldüyse seçim kapanır).
+- `agents`: makinede **kurulu** tüm ajanlar (ikili bulundu ve `--version`
+  okundu). Yerel varsayılan kurulu değilse yine listelenir:
+  `{ "version": null, "status": "not_installed" }`. Kurulu olmayan diğerleri
+  listelenmez.
+- `status`: `ready | auth_required | rate_limited | not_installed`, ajan başına.
+  Hiç denenmemiş ajan `ready` sayılır (oturum ilk işte ya da 10 dk'lık
+  denetimde anlaşılır). `until` (isteğe bağlı, ISO 8601): `rate_limited` bitişi.
+
+CLI sürümleri her hello'da yeniden okumaz: önbellek 10 dk'da bir ve yerel ayar
+(`fix.agent`, `fix.<ajan>.bin`) değişince tazelenir; sonradan kurulan ajan
+servisi yeniden başlatmadan görünür. Tek seferlik hello'lar (`login`, `fix
+status`, `fix doctor`) da aynı haritayı gönderir: servisin bildirdiğini ezmesinler.
+
+Yanıta `machine.default_agent` eklenir (panel seçimi ya da `null`). CLI onu
+`state.json`'a yazar, yalnız gösterir (`fix status`, `fix agent`); ayar dosyasına
+yazmaz. Yanıtta bu anahtar hiç yoksa CLI sunucuyu "ajan seçimi bilmiyor" sayar
+ve eskisi gibi yalnız yerel ajanı hazırsa claim eder.
+
+### 18.4 claim
+
+`job.agent`: `"claude" | "codex" | "gemini" | null`.
+
+- Dolu ve tanınan ad → CLI işi O ajanla çalıştırır (zaman aşımı ayarı, hata
+  etiketi, kurulum / giriş ipucu o ajanındır). `null` ya da alan yok → yerel
+  `fix.agent`.
+- Tanınmayan ad ya da ajan o an kurulu / hazır değil → CLI işi **başka ajanla
+  çalıştırmaz**: `failed` + açık Türkçe neden ("… bu bilgisayarda kurulu değil",
+  "… oturumu düşmüş", "… kullanım limitinde"; hepsinde "İş başka ajanla
+  çalıştırılmadı"), o ajanın durumunu günceller.
+- Canlı logun ilk satırı ajanı ve nedenini yazar:
+  `● ajan: Codex (ChatGPT) codex-cli 0.159.0 · panel seçimi` (ya da `· bu
+  bilgisayardaki seçim (fix.agent)`).
+- Bir ajanın durumu değişince (oturum, limit, kurulu değil) CLI bir sonraki
+  claim'den **önce** yeniden hello atar: sunucu bayat durumla iş vermesin.
+- CLI en az bir kurulu ajanı `ready` olduğu sürece claim eder (eskiden tek
+  durum makineyi kilitlerdi). Hangi işin verileceğine sunucu karar verir.
+
+### 18.5 Engel ajan başına
+
+CLI durumu ajan başına tutar (`state.json` → `agents.<ad> = {status, until}`).
+Eski tek kayıt (`state.agent`) ilk okumada o anki yerel varsayılana taşınır.
+Oturum düşen ajan 10 dk'da bir yeniden denenir; limit 30 dk soğur; ikisi de ajan
+başınadır.
+
+Sunucuda `FixMachine::agentStatus(ajan)`: haritada yok, `version` null ya da
+`not_installed` → `not_installed`; `auth_required` / `rate_limited` → o; gerisi
+`ready`. `FixRouting::resolve()` (claim, panel ve bildirim aynı sonucu kullanır)
+adayları etkin ajanı `ready` olanlara daraltır. Aday kalmazsa
+`routing.state = "agent_blocked"`, `routing.machine` = ilk aday, artı
+`routing.agent` ve `routing.agent_status`
+(`not_installed | auth_required | rate_limited`). İş `queued` bekler; başka
+ajana düşmez. Claim'deki makine geneli `agentBlocked()` erken dönüşü kalkar,
+karar iş başına verilir.
+
+### 18.6 Veri modeli ve panel uçları
+
+- `fix_machines.local_agent`, `fix_machines.default_agent`,
+  `fix_project_links.agent`, `fix_jobs.agent` (claim anında verilen etkin ajan,
+  gösterim için): `string(20) null`.
+- `PATCH /v1/panel/fix/machines/{id}` `{default_agent}` (nullable). 422: makine
+  seçimi desteklemiyor (`local_agent` NULL) ya da ajan orada kurulu değil.
+  `null` = bilgisayardaki seçime dön.
+- Makine JSON'u: `agent_select` (bool), `local_agent`, `default_agent`,
+  `effective_agent`, `agents` (durum ve `until` dahil).
+- Eşleme upsert'ü `agent` (nullable) alır; 422 kuralları makineninkiyle aynı.
+  Alan hiç gelmezse: makine aynıysa eski değer korunur, makine değiştiyse NULL.
+- İş JSON'u: `agent`, `routing.agent`, `routing.agent_status`; `routing.state`
+  yeni değer `agent_blocked`.
+
+### 18.7 Eski CLI
+
+≤0.6.x `agent` göndermez ve `agents`'ta yalnız seçili ajanını taşır. Sunucu
+`local_agent`'ı NULL yapar; panel seçimi kapalıdır ("CLI'ı güncelleyin
+(0.7.0+)"). Etkin ajan = panel seçimi yoksa `agents`'ın ilk anahtarı; harita
+boşsa ajan bilinmez, engel yoktur (bugünkü davranış). Eski CLI `job.agent`'ı
+okumaz; kapı onu zaten yalnız bildirdiği ajanın işine sınırlar.

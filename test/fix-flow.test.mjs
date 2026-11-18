@@ -21,12 +21,15 @@ const api = makeRepo(base, 'adall.api', { branches: ['main', 'test'] });
 makeRepo(base, 'adall.web', { branches: ['main'] });
 const project = api.project;
 
+// Sahte ajanlar `--version`a cevap verir: kurulu sayılmanın koşulu budur (§18).
+const VERSION_STUB = "if (process.argv.includes('--version')) { console.log('9.9.9 (fake)'); process.exit(0); }\n";
+
 // Sahte claude: stdin'i okur, adall.api/app.txt'yi düzeltir, commit eder.
 const fakeClaude = join(base, 'fake-claude.mjs');
 writeFileSync(
   fakeClaude,
   `#!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+${VERSION_STUB}import { execFileSync } from 'node:child_process';
 import { writeFileSync, readFileSync } from 'node:fs';
 let input = '';
 process.stdin.on('data', (d) => (input += d));
@@ -111,6 +114,9 @@ function cfg() {
   c.fix.key = 'sbf_live_' + 'x'.repeat(40);
   c.fix.workdir = join(base, 'home', 'fix');
   c.fix.claude.bin = fakeClaude;
+  // Gerçek codex / gemini kuruluysa testler ona dokunmasın.
+  c.fix.codex.bin = join(base, 'yok-codex');
+  c.fix.gemini.bin = join(base, 'yok-gemini');
   c.fix.links = [{ domain: 'adall.io', root: project, base: null, repos: null }];
   return c;
 }
@@ -289,7 +295,7 @@ test('protokol 3: kod değiştirmeden soru soran Janet → needs_input', async (
   const { writeFileSync: w, chmodSync: ch } = await import('node:fs');
   const ask = join(base, 'fake-claude-ask.mjs');
   w(ask, `#!/usr/bin/env node
-let i=''; process.stdin.on('data',d=>i+=d); process.stdin.on('end',()=>{
+${VERSION_STUB}let i=''; process.stdin.on('data',d=>i+=d); process.stdin.on('end',()=>{
   const t='ÖZET: iki seçenek var\\nSORU: contracts tablosunu mu yoksa agreements tablosunu mu kullanalım?';
   console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,result:t}));
 });
@@ -313,7 +319,7 @@ test('§15: ilgili olaylar prompt\'ta; Janet lookup komutunu kendi çalıştır�
   const out = join(base, 'lookup-out.txt');
   const seeker = join(base, 'fake-claude-lookup.mjs');
   w(seeker, `#!/usr/bin/env node
-import { execSync } from 'node:child_process';
+${VERSION_STUB}import { execSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 let i=''; process.stdin.on('data',d=>i+=d); process.stdin.on('end',()=>{
   writeFileSync(process.env.SB_TEST_PROMPT, i);
