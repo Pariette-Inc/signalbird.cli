@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { agentMain, AGENT_HELP } from './agent/index.mjs';
 import { ApiError } from './api.mjs';
@@ -7,7 +7,7 @@ import { AGENT_NAMES, AGENTS, agentName, agentVersion, probeAgent } from './fix/
 import { describeLink, discoverProjects, suggestRoots } from './fix/discover.mjs';
 import { deviceLogin } from './fix/login.mjs';
 import { tryRun } from './fix/git.mjs';
-import { assertFixAllowed, fixClient, FixRunner } from './fix/runner.mjs';
+import { assertFixAllowed, fixClient, FixRunner, helloAgents, loadState, saveState, storedAgentStatus } from './fix/runner.mjs';
 import { install, logFile, restart, serviceStatus, uninstall } from './fix/service.mjs';
 import { lookup } from './fix/lookup.mjs';
 import { listJobs, removeJob } from './fix/workspace.mjs';
@@ -30,10 +30,10 @@ Janet (geliştirici bilgisayarı): Signalbird alarmını kendi ajanınıza (Clau
   signalbird fix install                 Açılışta başlayan servis olarak kurar (launchd / systemd)
   signalbird fix uninstall
   signalbird fix start                   Ön planda çalıştırır
-  signalbird fix status                  Servis, bağlantı, açık iş klasörleri
+  signalbird fix status                  Servis, bağlantı, ajanlar (panel seçimi dahil), açık iş klasörleri
   signalbird fix doctor                  git / gh / ajan (oturum dahil) / API kontrolü
   signalbird fix agent [claude|codex|gemini] [--key …] [--env AD=değer]
-                                         Janet'ın kullandığı ajanı gösterir ya da değiştirir
+                                         Kurulu ajanları gösterir ya da bu bilgisayarın varsayılanını değiştirir
   signalbird fix claude-token [anahtar]  Claude'a uzun ömürlü anahtarla bağlanır (claude setup-token)
   signalbird fix cleanup [--dry-run] [--force]
                                          Sunucuda kapanmış işlerin yerel klonlarını siler
@@ -132,7 +132,7 @@ async function login(argv) {
       protocol: FIX_PROTOCOL,
       links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
       projects: projects.map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })),
-      agents: { [agentName(cfg)]: { version: agentVersion(cfg), status: 'ready' } },
+      ...helloAgents(cfg, loadState(cfg)),
     });
   } catch {}
   ui.gap();
@@ -221,12 +221,11 @@ async function fixAgent(argv) {
   const wanted = positionals[0];
 
   if (!wanted) {
-    out(`Janet şu an ${c.bold(AGENTS[current].label)} ile çalışıyor.\n`);
-    for (const n of AGENT_NAMES) {
-      const v = agentVersion(cfg, n);
-      out(`  ${n === current ? c.green('●') : ' '} ${n.padEnd(7)} ${AGENTS[n].label.padEnd(16)} ${v ? c.dim(v) : c.dim(`kurulu değil → ${AGENTS[n].install}`)}`);
-    }
-    return out(`\nDeğiştirmek için: signalbird fix agent codex   (ya da claude, gemini)`);
+    const st = loadState(cfg);
+    out(`Bu bilgisayarın varsayılanı: ${c.bold(AGENTS[current].label)}\n`);
+    printAgents(cfg, st);
+    out(`\n${panelLine(st.default_agent, st.agent_select)}`);
+    return out(`Değiştirmek için: signalbird fix agent codex   (ya da claude, gemini)`);
   }
 
   if (!AGENTS[wanted]) die(`Bilinmeyen ajan: ${wanted}. Seçenekler: ${AGENT_NAMES.join(', ')}`);
@@ -251,8 +250,10 @@ async function fixAgent(argv) {
   sp.stop();
   if (!probe.ok) die(`${a.label} çalışmadı (${probe.failure === 'auth_required' ? 'oturum yok' : probe.detail || probe.failure}). ${agentFix(wanted, probe.failure) || ''}`);
   saveConfig(cfg);
-  resetAgentState(cfg);
-  ui.ok(`Janet artık ${a.label} ile çalışıyor.`);
+  resetAgentState(cfg, wanted);
+  ui.ok(`Bu bilgisayarın varsayılan ajanı artık ${a.label}.`);
+  const panel = loadState(cfg).default_agent;
+  if (AGENTS[panel] && panel !== wanted) ui.line(c.dim(`Panelde ${AGENTS[panel].label} seçili; panel seçimi önceliklidir (Janet → Bilgisayarlar).`));
   if (restart()) ui.ok('Servis yeniden başlatıldı.');
 }
 
@@ -283,19 +284,47 @@ async function fixClaudeToken(argv) {
   sp.stop();
   if (!probe.ok) die(`Anahtarla da çalışmadı: ${probe.detail}`);
   saveConfig(cfg);
-  resetAgentState(cfg);
+  resetAgentState(cfg, 'claude');
   ui.ok('Claude anahtarı kaydedildi ve çalışıyor (~/.signalbird/config.json, yalnız sizin okuyabileceğiniz dosya).');
   if (restart()) ui.ok('Servis yeniden başlatıldı; Janet görev almaya hazır.');
 }
 
-function resetAgentState(cfg) {
+/** Ajanın auth_required / rate_limited bayrağını kaldırır; true = bayrak vardı. */
+function resetAgentState(cfg, name) {
   try {
-    const statePath = `${cfg.fix.workdir}/state.json`;
-    if (!existsSync(statePath)) return;
-    const st = JSON.parse(readFileSync(statePath, 'utf8'));
-    st.agent = { status: 'ready', until: null };
-    writeFileSync(statePath, JSON.stringify(st, null, 2));
-  } catch {}
+    if (!existsSync(`${cfg.fix.workdir}/state.json`)) return false;
+    const st = loadState(cfg);
+    const had = storedAgentStatus(st, name).status !== 'ready';
+    st.agents[name] = { status: 'ready', until: null };
+    saveState(cfg, st);
+    return had;
+  } catch {
+    return false;
+  }
+}
+
+const STATUS_TEXT = { ready: 'hazır', auth_required: 'oturum yok', rate_limited: 'limitte', not_installed: 'kurulu değil' };
+
+/** Kurulu ajanlar durumlarıyla; ● = bu bilgisayarın varsayılanı. */
+function printAgents(cfg, st) {
+  const { agent: local, agents } = helloAgents(cfg, st);
+  for (const n of AGENT_NAMES) {
+    const a = agents[n];
+    const head = `  ${n === local ? c.green('●') : ' '} ${n.padEnd(7)} ${AGENTS[n].label.padEnd(16)}`;
+    if (!a || !a.version) {
+      out(`${head} ${c.dim(`kurulu değil → ${AGENTS[n].install}`)}`);
+      continue;
+    }
+    const until = a.until ? ` (bitiş ${new Date(a.until).toLocaleString('tr-TR')})` : '';
+    const s = `${STATUS_TEXT[a.status] || a.status}${until}`;
+    out(`${head} ${c.dim(a.version.padEnd(24))} ${a.status === 'ready' ? c.green(s) : c.red(s)}`);
+  }
+}
+
+function panelLine(panel, supported) {
+  if (supported === false) return 'Panel seçimi: sunucu henüz desteklemiyor; iş bu bilgisayarın varsayılanıyla çalışır.';
+  if (AGENTS[panel]) return `Panel seçimi: ${c.bold(AGENTS[panel].label)} (önceliklidir; projeye özel seçim panelde ayrıca yapılabilir)`;
+  return 'Panel seçimi: yok → bu bilgisayarın varsayılanı kullanılır (projeye özel seçim panelde yapılabilir)';
 }
 
 async function logout() {
@@ -323,7 +352,7 @@ async function fixLogin(argv) {
       protocol: FIX_PROTOCOL,
       links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
       projects: cfg.fix.roots.length ? discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
-      agents: {},
+      ...helloAgents(cfg, loadState(cfg)),
     });
     saveConfig(cfg);
     out(`✓ Bağlandı: makine "${res.machine?.name}".`);
@@ -402,12 +431,15 @@ async function fixStatus() {
   const svc = serviceStatus();
   out(`signalbird ${VERSION} · API ${cfg.api}`);
   out(`Anahtar: ${cfg.fix.key ? cfg.fix.key.slice(0, 16) + '…' : 'yok'}`);
-  out(`Ajan: ${AGENTS[agentName(cfg)].label} ${agentVersion(cfg) || '(kurulu değil)'}  · değiştirmek için: signalbird fix agent`);
   out(`Servis: ${svc.installed ? (svc.running ? `çalışıyor (pid ${svc.pid ?? '?'})` : 'kurulu, çalışmıyor') : 'kurulu değil → Janet görev almaz. Kurmak için: signalbird fix install'}`);
   const projects = discoverProjects(cfg.fix.roots);
   out(`Proje kökü: ${cfg.fix.roots.join(', ') || 'yok (signalbird login --root …)'} · ${projects.length} proje`);
   out(`Yerel bağlar: ${cfg.fix.links.map(targetLabel).join(', ') || 'yok'}`);
 
+  const st = loadState(cfg);
+  // Servisin son hello'da sakladığı panel seçimi; sunucuya ulaşılırsa tazesi.
+  let panel = st.default_agent ?? null;
+  let supported = st.agent_select;
   if (cfg.fix.key) {
     try {
       const res = await fixClient(cfg, { retry: false })('POST', '/v1/fix/hello', {
@@ -415,13 +447,19 @@ async function fixStatus() {
         protocol: FIX_PROTOCOL,
         links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
         projects: cfg.fix.roots.length ? projects.map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
-        agents: { [agentName(cfg)]: { version: agentVersion(cfg), status: 'ready' } },
+        ...helloAgents(cfg, st),
       });
       out(`Sunucu: makine "${res.machine?.name}", kuyrukta ${res.pending ?? 0} iş, temizlik bekleyen ${res.cleanup?.length ?? 0}`);
+      supported = Object.hasOwn(res.machine || {}, 'default_agent');
+      panel = supported ? res.machine.default_agent ?? null : null;
     } catch (err) {
       out(`Sunucu: ${err.message}`);
     }
   }
+
+  out(`\nAjanlar · bu bilgisayarın varsayılanı: ${AGENTS[agentName(cfg)].label} (değiştirmek için: signalbird fix agent <ad>)`);
+  printAgents(cfg, st);
+  out(panelLine(panel, supported));
 
   const jobs = listJobs(cfg.fix.workdir);
   out(`\nYerel iş klasörleri (${jobs.length}) · ${cfg.fix.workdir}/jobs`);
@@ -455,6 +493,10 @@ async function fixDoctor() {
   if (cv) ok &= check(`${an} oturumu`, probe.ok, probe.ok ? 'çalışıyor' : agentFix(an, probe.failure) || probe.detail);
   ok &= check('root değil', !(process.getuid && process.getuid() === 0), '');
 
+  // auth_required / rate_limited bayrağını sıfırla: yalnız ajan gerçekten
+  // çalışıyorsa. hello'dan önce: sunucu da tazesini görsün.
+  if (probe.ok && resetAgentState(cfg, an)) out(`• ${AGENTS[an].label} durumu "ready" olarak sıfırlandı.`);
+
   try {
     assertFixAllowed(cfg);
     // Servisin bildirdiği bağları/projeleri ezmemek için aynısını gönder.
@@ -463,26 +505,12 @@ async function fixDoctor() {
       protocol: FIX_PROTOCOL,
       links: cfg.fix.links.map((l) => (l.domain ? { domain: l.domain } : { channel: l.channel })),
       projects: cfg.fix.roots.length ? discoverProjects(cfg.fix.roots).map((p) => ({ name: p.name, repos: p.repos.slice(0, 50) })) : undefined,
-      agents: { [agentName(cfg)]: { version: cv, status: 'ready' } },
+      ...helloAgents(cfg, loadState(cfg)),
     });
     check('API', true, `makine "${res.machine?.name}"`);
   } catch (err) {
     ok = check('API', false, err.message) && ok;
   }
-
-  // auth_required / rate_limited bayrağını sıfırla: yalnız ajan gerçekten çalışıyorsa.
-  if (probe.ok) try {
-    const statePath = `${cfg.fix.workdir}/state.json`;
-    if (existsSync(statePath)) {
-      const st = JSON.parse(readFileSync(statePath, 'utf8'));
-      if (st.agent?.status && st.agent.status !== 'ready') {
-        st.agent = { status: 'ready', until: null };
-        const { writeFileSync } = await import('node:fs');
-        writeFileSync(statePath, JSON.stringify(st, null, 2));
-        out(`• ${AGENTS[an].label} durumu "ready" olarak sıfırlandı.`);
-      }
-    }
-  } catch {}
 
   for (const link of cfg.fix.links) {
     out(`\n${targetLabel(link)} → ${link.root}`);

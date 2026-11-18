@@ -68,7 +68,9 @@ signalbird fix agent codex      # dener, kaydeder, servisi yeniden başlatır
 signalbird fix agent gemini --key AIza…
 ```
 
-**Janet neden ücretsiz?** Çünkü yapay zekâ sizin bilgisayarınızda, sizin hesabınızla çalışır: Claude, ChatGPT ya da Gemini aboneliğiniz. Signalbird hiçbir yapay zekâ çağrısı yapmaz, ücretini ve limitini üstlenmez. Kullanım ücreti ve limitler ajanınızın sağlayıcısıyla aranızdadır; limit dolarsa Janet o bilgisayara 30 dakika görev vermez.
+**Panelden seçim (CLI 0.7.0+).** Kurulu her ajan Kurulum → Janet'taki bilgisayar kartında görünür. Orada o bilgisayarın varsayılan ajanını ya da tek bir proje için başka bir ajanı seçebilirsiniz. Panel seçimi yerel `fix agent` ayarından önce gelir (onu değiştirmez); panelde seçim yoksa yerel ayar kullanılır. Ajanı kurulu değilse, oturumu düşmüşse ya da limitteyse iş onu bekler; başka ajana verilmez.
+
+**Janet neden ücretsiz?** Çünkü yapay zekâ sizin bilgisayarınızda, sizin hesabınızla çalışır: Claude, ChatGPT ya da Gemini aboneliğiniz. Signalbird hiçbir yapay zekâ çağrısı yapmaz, ücretini ve limitini üstlenmez. Kullanım ücreti ve limitler ajanınızın sağlayıcısıyla aranızdadır; limit dolarsa Janet o bilgisayara 30 dakika o ajanın görevini vermez (kurulu diğer ajanlar çalışmaya devam eder).
 
 ### Janet komutları
 
@@ -76,9 +78,9 @@ signalbird fix agent gemini --key AIza…
 | --- | --- |
 | `signalbird login [--root ~/git] [--agent claude\|codex\|gemini] [--no-service] [--api URL]` | Bu bilgisayarı hesabınıza bağlar (tarayıcı onayı), proje klasörünü bulur, servisi kurar. Bir kez çalıştırmanız yeter. |
 | `signalbird logout` | Bu bilgisayarın oturumunu ve servisini kaldırır. |
-| `signalbird fix status` | Servis, bağlantı, seçili ajan ve açık görev klasörleri. |
+| `signalbird fix status` | Servis, bağlantı, kurulu ajanlar ve durumları, yerel varsayılan ve panel seçimi, açık görev klasörleri. |
 | `signalbird fix doctor` | git, gh, seçili ajan (oturum dahil) ve API kontrolü. Ajan yeniden çalışıyorsa eski "giriş yapın" bayrağını sıfırlar. |
-| `signalbird fix agent [claude\|codex\|gemini] [--key …] [--env AD=değer]` | Janet'ın kullandığı yapay zekâ ajanını gösterir ya da değiştirir (dener, kaydeder, servisi yeniden başlatır). |
+| `signalbird fix agent [claude\|codex\|gemini] [--key …] [--env AD=değer]` | Kurulu ajanları gösterir ya da bu bilgisayarın varsayılan ajanını değiştirir (dener, kaydeder, servisi yeniden başlatır). |
 | `signalbird fix claude-token [anahtar]` | Janet'ı `claude setup-token` ile alınan uzun ömürlü anahtarla Claude'a bağlar. Terminal anahtarı iki satıra bölse de doğru okunur. |
 | `signalbird fix links` | Yerel bağlar ve klasörünüzde bulunan projeler. |
 | `signalbird fix link <domain\|#kanal> <klasör> [--base dal] [--repos a,b]` | Bir domain'i ya da kanalı bu bilgisayardaki klasöre sabitler. Paneldeki otomatik eşlemenin önüne geçer. |

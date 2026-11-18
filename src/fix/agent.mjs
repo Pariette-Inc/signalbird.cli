@@ -65,6 +65,11 @@ export function agentVersion(cfg, name = agentName(cfg)) {
   return out ? out.split('\n')[0].trim().slice(0, 40) || null : null;
 }
 
+/** Üç ajanın sürümü; `null` = kurulu değil (ikili yok ya da sürüm okunamadı). */
+export function agentVersions(cfg) {
+  return Object.fromEntries(AGENT_NAMES.map((n) => [n, agentVersion(cfg, n)]));
+}
+
 const AUTH_RE = [
   /failed to authenticate/i, /oauth token (has )?expired/i, /not logged in/i, /please run \/login/i, /invalid api key/i,
   /authentication_error/i, /please (log ?in|sign in)/i, /run `?codex login/i, /401 unauthorized/i,

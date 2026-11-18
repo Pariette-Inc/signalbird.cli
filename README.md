@@ -70,7 +70,9 @@ signalbird fix agent codex      # tests it, saves it, restarts the service
 signalbird fix agent gemini --key AIza…
 ```
 
-**Why is Janet free?** Because the AI runs on your computer with your own account: your Claude, ChatGPT or Gemini subscription. Signalbird makes no AI calls and does not cover their cost or limits. Usage fees and limits are between you and your agent's provider; if the limit is hit, Janet stops sending jobs to that computer for 30 minutes.
+**Choosing in the panel (CLI 0.7.0+).** Every installed agent shows up on the computer's card under Setup → Janet. There you can pick a default agent for that computer, or a different agent for a single project. The panel choice wins over the local `fix agent` setting (which it never changes); with nothing picked in the panel, the local setting is used. A job meant for an agent that is not installed, signed out or out of quota waits for it; it is never handed to another agent.
+
+**Why is Janet free?** Because the AI runs on your computer with your own account: your Claude, ChatGPT or Gemini subscription. Signalbird makes no AI calls and does not cover their cost or limits. Usage fees and limits are between you and your agent's provider; if the limit is hit, Janet stops sending that agent's jobs to that computer for 30 minutes (other installed agents keep working).
 
 ### Janet commands
 
@@ -78,9 +80,9 @@ signalbird fix agent gemini --key AIza…
 | --- | --- |
 | `signalbird login [--root ~/git] [--agent claude\|codex\|gemini] [--no-service] [--api URL]` | Connects this computer with your account (browser approval), finds the project folder, installs the service. Run it once. |
 | `signalbird logout` | Removes this computer's session and its service. |
-| `signalbird fix status` | Service, connection, selected agent and open job folders. |
+| `signalbird fix status` | Service, connection, installed agents with their state, the local default and the panel choice, open job folders. |
 | `signalbird fix doctor` | Checks git, gh, the selected agent (including the session) and the API; clears a stale "sign in" flag once the agent works again. |
-| `signalbird fix agent [claude\|codex\|gemini] [--key …] [--env NAME=value]` | Shows or switches the AI agent Janet uses (tests it, saves it, restarts the service). |
+| `signalbird fix agent [claude\|codex\|gemini] [--key …] [--env NAME=value]` | Shows the installed agents or switches this computer's default agent (tests it, saves it, restarts the service). |
 | `signalbird fix claude-token [token]` | Connects Janet to Claude with a long-lived token from `claude setup-token`. Pasting works even when the terminal splits the token over two lines. |
 | `signalbird fix links` | Local links and the projects found under your folder. |
 | `signalbird fix link <domain\|#channel> <folder> [--base branch] [--repos a,b]` | Pins a domain or channel to a folder on this computer. Overrides the panel's automatic match. |
